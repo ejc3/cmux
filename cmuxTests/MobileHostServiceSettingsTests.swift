@@ -23,6 +23,29 @@ struct MobileHostServiceSettingsTests {
         #expect(!MobileHostService.isListeningEnabled(defaults: defaults))
     }
 
+    @Test func mobileHostListenerForceFlagEnablesXCTestListener() throws {
+        let suiteName = "MobileHostServiceSettingsTests.Force.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        #expect(!MobileHostService.forceListenerForXCTest(environment: [:], arguments: []))
+        #expect(MobileHostService.forceListenerForXCTest(
+            environment: ["CMUX_FORCE_MOBILE_HOST_LISTENER": "1"],
+            arguments: []
+        ))
+        #expect(MobileHostService.forceListenerForXCTest(
+            environment: [:],
+            arguments: ["CMUX_FORCE_MOBILE_HOST_LISTENER=1"]
+        ))
+
+        defaults.set(false, forKey: MobileHostService.listeningEnabledDefaultsKey)
+        #expect(MobileHostService.isListeningEnabled(
+            defaults: defaults,
+            environment: ["CMUX_FORCE_MOBILE_HOST_LISTENER": "1"],
+            arguments: []
+        ))
+    }
+
     @Test func configuredPortDefaultsToCatalogDefaultWhenUnset() throws {
         let suiteName = "MobileHostServiceSettingsTests.Port.Default.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
