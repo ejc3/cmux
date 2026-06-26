@@ -76,6 +76,54 @@ final class cmuxUITests: XCTestCase {
         assertTerminalRow(2, label: "host: UI Test Mac", in: app)
     }
 
+    @MainActor
+    func testCloudSyncVideoTypesIntoRealMacTerminal() throws {
+        let environment = ProcessInfo.processInfo.environment
+        let phrase = environment["SYNC_MARKER"] ?? "cloud simulator same terminal"
+        var launchEnvironment: [String: String] = [:]
+        var launchArguments = ["CMUX_SYNC_VIDEO_FORCE_AUTH=1"]
+        let attachURL = environment["CMUX_DOGFOOD_ATTACH_URL"] ?? ""
+        XCTAssertFalse(attachURL.isEmpty, "Cloud sync video requires CMUX_DOGFOOD_ATTACH_URL")
+        launchEnvironment["CMUX_DOGFOOD_ATTACH_URL"] = attachURL
+        launchArguments.append("CMUX_DOGFOOD_ATTACH_URL=\(attachURL)")
+        launchEnvironment["CMUX_UITEST_AUTH_FIXTURE"] = "1"
+        launchEnvironment["CMUX_UITEST_AUTH_USER_ID"] = "cloud-sync-video"
+        launchEnvironment["CMUX_UITEST_AUTH_EMAIL"] = "cloud-sync-video@cmux.local"
+        launchEnvironment["CMUX_UITEST_AUTH_NAME"] = "Cloud Sync Video"
+        launchEnvironment["CMUX_SYNC_VIDEO_FORCE_AUTH"] = "1"
+        for key in ["CMUX_UITEST_STACK_EMAIL", "CMUX_UITEST_STACK_PASSWORD", "CMUX_MOBILE_DEV_STACK_AUTH_TOKEN"] {
+            if let value = environment[key], !value.isEmpty {
+                launchEnvironment[key] = value
+                launchArguments.append("\(key)=\(value)")
+            }
+        }
+
+        let app = launchApp(mockData: false, environment: launchEnvironment, arguments: launchArguments)
+        try openSelectedWorkspaceIfNeeded(app)
+        XCTAssertTrue(app.otherElements["MobileTerminalSurface"].waitForExistence(timeout: 45))
+
+        let composeButton = app.buttons[Composer.composeButton]
+        XCTAssertTrue(composeButton.waitForExistence(timeout: 10))
+        composeButton.tap()
+
+        let field = app.descendants(matching: .any)[Composer.field]
+        XCTAssertTrue(field.waitForExistence(timeout: 10))
+        waitForDock(in: app, timeout: 10, describe: "cloud sync video composer focused") {
+            $0["composerActive"] == "1" && $0["fieldFocused"] == "1"
+        }
+        field.typeText("echo \(phrase)\n")
+
+        let expectedText = phrase
+        let expectation = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                self.terminalRows(in: app).contains { $0.contains(expectedText) }
+            },
+            object: app
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [expectation], timeout: 20), .completed)
+        sleep(6)
+    }
+
     /// Regression: fast pinch-zoom must not hang the main thread (the
     /// scene-update watchdog `0x8BADF00D` was killing the app because
     /// libghostty surface calls block on the main thread) and must not
@@ -1274,10 +1322,12 @@ final class cmuxUITests: XCTestCase {
     private func launchApp(
         mockData: Bool,
         clearAuth: Bool = false,
-        environment: [String: String] = [:]
+        environment: [String: String] = [:],
+        arguments: [String] = []
     ) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments += ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments += arguments
         app.launchEnvironment["CMUX_UITEST_MOCK_DATA"] = mockData ? "1" : "0"
         for (key, value) in environment {
             app.launchEnvironment[key] = value
@@ -1291,14 +1341,29 @@ final class cmuxUITests: XCTestCase {
 
     @MainActor
     private func openSelectedWorkspaceIfNeeded(_ app: XCUIApplication) throws {
-        if app.otherElements["MobileTerminalSurface"].waitForExistence(timeout: 8) {
+        let terminalSurface = app.otherElements["MobileTerminalSurface"]
+        if terminalSurface.waitForExistence(timeout: 8) {
             return
         }
 
-        let row = app.descendants(matching: .any)["MobileWorkspaceRow-workspace-main"]
-        XCTAssertTrue(row.waitForExistence(timeout: 8))
+        let rowQuery = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "MobileWorkspaceRow-"))
+        let row = rowQuery.firstMatch
+        let readyPredicate = NSPredicate { _, _ in
+            terminalSurface.exists || row.exists
+        }
+        let readyExpectation = XCTNSPredicateExpectation(predicate: readyPredicate, object: app)
+        let result = XCTWaiter.wait(for: [readyExpectation], timeout: 90)
+        if result != .completed {
+            print("Cloud sync video app tree after attach timeout:")
+            print(app.debugDescription)
+        }
+        XCTAssertEqual(result, .completed, "Timed out waiting for the real Mac attach flow to show a terminal or workspace row")
+        if terminalSurface.exists {
+            return
+        }
         row.tap()
-        XCTAssertTrue(app.otherElements["MobileTerminalSurface"].waitForExistence(timeout: 8))
+        XCTAssertTrue(terminalSurface.waitForExistence(timeout: 30))
     }
 
     @MainActor
