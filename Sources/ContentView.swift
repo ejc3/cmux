@@ -12934,6 +12934,13 @@ private final class SidebarTabItemContextMenuState: ObservableObject {
 
 struct TabItemView: View, Equatable {
     private static let workspaceObservationCoalesceInterval: RunLoop.SchedulerTimeType.Stride = .milliseconds(40)
+    // The immediate observation publisher exists for instant feedback on direct
+    // user actions (pin, color, title edit). A leading-edge throttle keeps that
+    // first event instant while collapsing bursts: agents (e.g. Codex) rewrite a
+    // workspace title every turn, and with many workspaces each rewrite otherwise
+    // triggers a full makeWorkspaceSnapshot() rebuild per row. See
+    // https://github.com/manaflow-ai/cmux/issues/4127.
+    private static let sidebarImmediateObservationThrottleInterval: RunLoop.SchedulerTimeType.Stride = .milliseconds(50)
     private static let legacyVMWebSocketDescription = "VM WebSocket PTY"
 
     // Closures, Bindings, and object references are excluded from ==
@@ -13791,6 +13798,16 @@ struct TabItemView: View, Equatable {
         .onReceive(
             tab.sidebarImmediateObservationPublisher
                 .receive(on: RunLoop.main)
+                // Leading-edge coalesce: the first change in a burst redraws the
+                // row immediately (so a user pin/color/title edit still feels
+                // instant), then at most one redraw per window. Without this an
+                // agent rewriting the title every turn fires a full snapshot
+                // rebuild per workspace per turn (#4127).
+                .throttle(
+                    for: Self.sidebarImmediateObservationThrottleInterval,
+                    scheduler: RunLoop.main,
+                    latest: true
+                )
         ) { _ in
 #if DEBUG
             let description = tab.customDescription ?? ""
