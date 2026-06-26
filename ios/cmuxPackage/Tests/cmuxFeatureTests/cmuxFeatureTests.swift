@@ -71,14 +71,18 @@ final class TerminalOutputCollector {
 }
 
 #if DEBUG
-@Test func mobileDevStackAuthTokenProviderUsesExplicitEnvironmentOnly() {
-    #expect(MobileShellDevStackAuthTokenProvider.token(environment: [:]) == nil)
+@Test func mobileDevStackAuthTokenProviderUsesExplicitEnvironmentOrArgument() {
+    #expect(MobileShellDevStackAuthTokenProvider.token(environment: [:], arguments: []) == nil)
     #expect(MobileShellDevStackAuthTokenProvider.token(environment: [
         MobileShellDevStackAuthTokenProvider.environmentKey: "   "
-    ]) == nil)
+    ], arguments: []) == nil)
     #expect(MobileShellDevStackAuthTokenProvider.token(environment: [
         MobileShellDevStackAuthTokenProvider.environmentKey: " cmux-dev-token "
-    ]) == "cmux-dev-token")
+    ], arguments: []) == "cmux-dev-token")
+    #expect(MobileShellDevStackAuthTokenProvider.token(
+        environment: [:],
+        arguments: ["CMUX_MOBILE_DEV_STACK_AUTH_TOKEN= arg-token "]
+    ) == "arg-token")
 }
 #endif
 
