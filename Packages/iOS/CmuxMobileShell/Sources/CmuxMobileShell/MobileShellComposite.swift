@@ -2770,6 +2770,30 @@ public final class MobileShellComposite: MobileTerminalOutputSinking {
         #endif
     }
 
+    #if DEBUG
+    private static var syncVideoDebugLoggingEnabled: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        if environment["CMUX_SYNC_VIDEO_FORCE_AUTH"] == "1" {
+            return true
+        }
+        return ProcessInfo.processInfo.arguments.contains("CMUX_SYNC_VIDEO_FORCE_AUTH=1")
+    }
+
+    private static func syncVideoDebugLog(_ message: @autoclosure () -> String) {
+        guard syncVideoDebugLoggingEnabled else { return }
+        print("CMUX_SYNC_VIDEO \(message())")
+    }
+
+    private static func syncVideoRouteDescription(_ route: CmxAttachRoute) -> String {
+        switch route.endpoint {
+        case let .hostPort(host, port):
+            return "\(route.kind.rawValue) \(host):\(port)"
+        case let .peer(peer):
+            return "\(route.kind.rawValue) peer:\(peer)"
+        }
+    }
+    #endif
+
     static func manualHostRoute(host: String, port: Int) throws -> CmxAttachRoute {
         let routeKind = MobileShellRouteAuthPolicy.manualRouteKind(for: host)
         return try CmxAttachRoute(
@@ -2807,6 +2831,11 @@ public final class MobileShellComposite: MobileTerminalOutputSinking {
         let ticket: CmxAttachTicket
         do {
             ticket = try CmxAttachTicketInput.decode(rawURL)
+            #if DEBUG
+            Self.syncVideoDebugLog(
+                "decoded ticket workspace=\(ticket.workspaceID) terminal=\(ticket.terminalID ?? "") routes=\(ticket.routes.map(Self.syncVideoRouteDescription).joined(separator: ","))"
+            )
+            #endif
             // The v2 grammar rejects loopback inside the decoder; the legacy
             // grammars must keep decoding loopback for the simulator dev flow
             // (where 127.0.0.1 IS the host Mac). On a physical phone no
@@ -2875,6 +2904,11 @@ public final class MobileShellComposite: MobileTerminalOutputSinking {
         // token is used), so an expired legacy code scanned offline must say
         // "offline", not crawl the route loop's stacked timeouts.
         let candidateRoutes = Self.supportedRoutes(for: ticket, supportedKinds: runtime?.supportedRouteKinds ?? [])
+        #if DEBUG
+        Self.syncVideoDebugLog(
+            "candidate routes supportedKinds=\((runtime?.supportedRouteKinds ?? []).map(\.rawValue).joined(separator: ",")) routes=\(candidateRoutes.map(Self.syncVideoRouteDescription).joined(separator: ","))"
+        )
+        #endif
         if !candidateRoutes.isEmpty {
             switch await failPairingIfOffline(attemptID: attemptID, phase: "preflight", routes: candidateRoutes) {
             case .failedOffline: return .failed
@@ -4520,6 +4554,9 @@ public final class MobileShellComposite: MobileTerminalOutputSinking {
         var lastError: (any Error)?
         for route in supportedRoutes {
             activeRoute = route
+            #if DEBUG
+            Self.syncVideoDebugLog("trying route \(Self.syncVideoRouteDescription(route))")
+            #endif
             mobileShellLog.info("pairing trying route kind=\(route.kind.rawValue, privacy: .public) endpoint=\(route.endpoint.logDescription, privacy: .private)")
             let client = MobileCoreRPCClient(
                 runtime: runtime,
@@ -4626,6 +4663,11 @@ public final class MobileShellComposite: MobileTerminalOutputSinking {
                 } catch {
                     lastError = error
                     guard isCurrentConnectionAttempt(generation) else { return nil }
+                    #if DEBUG
+                    Self.syncVideoDebugLog(
+                        "route failed \(Self.syncVideoRouteDescription(route)) scoped=\(workspaceListRequest.isScoped ? 1 : 0) error=\(String(describing: error))"
+                    )
+                    #endif
                     mobileShellLog.error(
                         "pairing route failed kind=\(route.kind.rawValue, privacy: .public) endpoint=\(route.endpoint.logDescription, privacy: .private) scoped=\(workspaceListRequest.isScoped ? 1 : 0, privacy: .public): \(String(describing: error), privacy: .private)"
                     )

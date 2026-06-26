@@ -311,7 +311,12 @@ struct CMUXMobileRootView: View {
     #endif
 
     private var isAuthenticated: Bool {
-        MobileRootAuthGate.isAuthenticated(
+        #if DEBUG
+        if syncVideoForceAuthEnabled {
+            return true
+        }
+        #endif
+        return MobileRootAuthGate.isAuthenticated(
             stackAuthenticated: authManager.isAuthenticated,
             attachTicketAuthenticated: hasActiveAttachTicketAuthentication
         )
@@ -331,6 +336,13 @@ struct CMUXMobileRootView: View {
     private var hasActiveAttachTicketAuthentication: Bool {
         didAuthenticateWithAttachTicket && store.hasActiveUnexpiredAttachTicket
     }
+
+    #if DEBUG
+    private var syncVideoForceAuthEnabled: Bool {
+        ProcessInfo.processInfo.environment["CMUX_SYNC_VIDEO_FORCE_AUTH"] == "1"
+            || ProcessInfo.processInfo.arguments.contains("CMUX_SYNC_VIDEO_FORCE_AUTH=1")
+    }
+    #endif
 
     private func syncShellAuthentication(
         _ isAuthenticated: Bool,
@@ -371,7 +383,12 @@ struct CMUXMobileRootView: View {
     }
 
     private func connectAttachURL(_ rawURL: String) {
-        guard !authManager.isRestoringSession else {
+        #if DEBUG
+        let canConnectDuringRestore = syncVideoForceAuthEnabled
+        #else
+        let canConnectDuringRestore = false
+        #endif
+        guard canConnectDuringRestore || !authManager.isRestoringSession else {
             pendingAttachURL = rawURL
             return
         }
@@ -487,8 +504,12 @@ struct CMUXMobileRootView: View {
             return false
         }
         didConsumeUITestAttachURL = true
-        Task {
-            await store.connectPairingURL(attachURL)
+        if isRawAttachURL(attachURL) {
+            connectAttachURL(attachURL)
+        } else {
+            Task {
+                await store.connectPairingURL(attachURL)
+            }
         }
         return true
         #else
