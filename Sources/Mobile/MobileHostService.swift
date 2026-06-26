@@ -482,9 +482,27 @@ final class MobileHostService {
             || environment["XCInjectBundleInto"] != nil
             || environment["DYLD_INSERT_LIBRARIES"]?.contains("libXCTest") == true
     }
+
+    nonisolated static func forceListenerForXCTest(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        arguments: [String] = ProcessInfo.processInfo.arguments
+    ) -> Bool {
+        environment["CMUX_FORCE_MOBILE_HOST_LISTENER"] == "1"
+            || arguments.contains("CMUX_FORCE_MOBILE_HOST_LISTENER=1")
+            || arguments.contains("--cmux-force-mobile-host-listener")
+    }
     #endif
 
-    nonisolated static func isListeningEnabled(defaults: UserDefaults) -> Bool {
+    nonisolated static func isListeningEnabled(
+        defaults: UserDefaults,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        arguments: [String] = ProcessInfo.processInfo.arguments
+    ) -> Bool {
+        #if DEBUG
+        if forceListenerForXCTest(environment: environment, arguments: arguments) {
+            return true
+        }
+        #endif
         if let override = defaults.object(forKey: listeningEnabledDefaultsKey) as? Bool {
             return override
         }
@@ -739,6 +757,7 @@ final class MobileHostService {
     #if DEBUG
     nonisolated private static func canPublishRoutesWithoutListenerForXCTest(defaults: UserDefaults) -> Bool {
         guard isRunningUnderXCTest else { return false }
+        guard !forceListenerForXCTest() else { return false }
         return defaults.object(forKey: listeningEnabledDefaultsKey) == nil
     }
 
