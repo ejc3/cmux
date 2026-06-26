@@ -191,11 +191,22 @@ import Testing
         #expect(BrowserSystemProxyMirror(systemProxySettings: settings) == nil)
     }
 
-    @Test("Exclude-simple-hostnames declines the mirror")
-    func excludeSimpleHostnamesDeclinesTheMirror() {
+    // Regression coverage for https://github.com/manaflow-ai/cmux/issues/5703:
+    // "Exclude simple hostnames" bypasses the proxy for every dot-less host, so
+    // plain `localhost` keeps working, but dotted `*.localhost` subdomains stay
+    // routed to the proxy and local dev servers (e.g. a Next.js app on
+    // `tenant.localhost:3000`) become unreachable. The mirror must still be
+    // produced with the loopback family excluded so `*.localhost` reaches the
+    // local server directly — Network.framework treats the `"localhost"`
+    // exclusion as a suffix that also covers `*.localhost`.
+    @Test("Exclude-simple-hostnames still mirrors with loopback excluded (#5703)")
+    func excludeSimpleHostnamesStillMirrorsWithLoopbackExcluded() throws {
         var settings = socksProxySettings()
         settings[kCFNetworkProxiesExcludeSimpleHostnames as String] = 1
-        #expect(BrowserSystemProxyMirror(systemProxySettings: settings) == nil)
+        let mirror = try #require(BrowserSystemProxyMirror(systemProxySettings: settings))
+        #expect(mirror.proxy == .socksV5(host: "socks.example.com", port: 1080))
+        #expect(mirror.excludedDomains.contains("localhost"))
+        #expect(mirror.excludedDomains == BrowserSystemProxyMirror.implicitExclusions)
     }
 
     @Test("Invalid endpoints are not mirrored")
