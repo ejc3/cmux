@@ -4,12 +4,18 @@ import CmuxMobileShell
 import CmuxMobileShellModel
 import CmuxMobileSupport
 import CmuxMobileWorkspace
+import OSLog
 import SwiftUI
 #if os(iOS)
 @preconcurrency import UIKit
 #elseif os(macOS)
 import AppKit
 #endif
+
+private let mobileRootLog = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "dev.cmux.ios",
+    category: "mobile-root"
+)
 
 struct CMUXMobileRootView: View {
     @Bindable var store: CMUXMobileShellStore
@@ -99,6 +105,9 @@ struct CMUXMobileRootView: View {
             #if os(iOS)
             pushCoordinator.bind(store: store)
             #endif
+            if connectUITestAttachURLIfNeeded() {
+                return
+            }
             // If the view mounts already authenticated (cached session, or a
             // mock/fixture launch), `onChange(of: isAuthenticated)` never fires,
             // so kick off the stored-Mac reconnect here too. Without this the
@@ -311,7 +320,12 @@ struct CMUXMobileRootView: View {
     #endif
 
     private var isAuthenticated: Bool {
-        MobileRootAuthGate.isAuthenticated(
+        #if DEBUG
+        if syncVideoForceAuthEnabled {
+            return true
+        }
+        #endif
+        return MobileRootAuthGate.isAuthenticated(
             stackAuthenticated: authManager.isAuthenticated,
             attachTicketAuthenticated: hasActiveAttachTicketAuthentication
         )
@@ -332,6 +346,18 @@ struct CMUXMobileRootView: View {
         didAuthenticateWithAttachTicket && store.hasActiveUnexpiredAttachTicket
     }
 
+    #if DEBUG
+    private var syncVideoForceAuthEnabled: Bool {
+        ProcessInfo.processInfo.environment["CMUX_SYNC_VIDEO_FORCE_AUTH"] == "1"
+            || ProcessInfo.processInfo.arguments.contains("CMUX_SYNC_VIDEO_FORCE_AUTH=1")
+    }
+
+    private func syncVideoDebugLog(_ message: @autoclosure () -> String) {
+        guard syncVideoForceAuthEnabled else { return }
+        mobileRootLog.info("CMUX_SYNC_VIDEO \(message(), privacy: .public)")
+    }
+    #endif
+
     private func syncShellAuthentication(
         _ isAuthenticated: Bool,
         isRestoringSession: Bool? = nil
@@ -351,6 +377,9 @@ struct CMUXMobileRootView: View {
     private func reconnectStoredMacIfNeeded() {
         guard isAuthenticated else { return }
         let startedUITestAttachURL = connectUITestAttachURLIfNeeded()
+        #if DEBUG
+        syncVideoDebugLog("reconnectStoredMacIfNeeded startedUITestAttachURL=\(startedUITestAttachURL) connectionState=\(String(describing: store.connectionState)) restoring=\(authManager.isRestoringSession)")
+        #endif
         guard !startedUITestAttachURL,
               MobileRootAuthGate.shouldReconnectStoredMac(
                 stackAuthenticated: authManager.isAuthenticated,
@@ -371,7 +400,16 @@ struct CMUXMobileRootView: View {
     }
 
     private func connectAttachURL(_ rawURL: String) {
-        guard !authManager.isRestoringSession else {
+        #if DEBUG
+        let canConnectDuringRestore = syncVideoForceAuthEnabled
+        syncVideoDebugLog("connectAttachURL canConnectDuringRestore=\(canConnectDuringRestore) restoring=\(authManager.isRestoringSession) url=\(rawURL)")
+        #else
+        let canConnectDuringRestore = false
+        #endif
+        guard canConnectDuringRestore || !authManager.isRestoringSession else {
+            #if DEBUG
+            syncVideoDebugLog("connectAttachURL pendingDuringRestore")
+            #endif
             pendingAttachURL = rawURL
             return
         }
@@ -379,6 +417,9 @@ struct CMUXMobileRootView: View {
         syncShellAuthentication(true)
         Task {
             let result = await store.connectPairingURLResult(rawURL)
+            #if DEBUG
+            syncVideoDebugLog("connectAttachURL result=\(String(describing: result)) connectionState=\(String(describing: store.connectionState))")
+            #endif
             if result == .needsUserApproval {
                 isShowingAddDeviceSheet = true
             }
@@ -390,6 +431,13 @@ struct CMUXMobileRootView: View {
     private func consumePendingURLIfReady() -> Bool {
         guard let rawURL = pendingAttachURL else { return false }
         if isRawAttachURL(rawURL) {
+            #if DEBUG
+            if syncVideoForceAuthEnabled {
+                pendingAttachURL = nil
+                connectAttachURL(rawURL)
+                return true
+            }
+            #endif
             guard !authManager.isRestoringSession else { return false }
             pendingAttachURL = nil
             connectAttachURL(rawURL)
@@ -484,11 +532,19 @@ struct CMUXMobileRootView: View {
         guard !didConsumeUITestAttachURL,
               isAuthenticated,
               let attachURL = UITestConfig.dogfoodAttachURL ?? UITestConfig.attachURL else {
+            #if DEBUG
+            syncVideoDebugLog("connectUITestAttachURLIfNeeded skipped consumed=\(didConsumeUITestAttachURL) authenticated=\(isAuthenticated) hasDogfoodURL=\(UITestConfig.dogfoodAttachURL != nil) hasAttachURL=\(UITestConfig.attachURL != nil)")
+            #endif
             return false
         }
         didConsumeUITestAttachURL = true
-        Task {
-            await store.connectPairingURL(attachURL)
+        syncVideoDebugLog("connectUITestAttachURLIfNeeded consuming rawAttach=\(isRawAttachURL(attachURL)) url=\(attachURL)")
+        if isRawAttachURL(attachURL) {
+            connectAttachURL(attachURL)
+        } else {
+            Task {
+                await store.connectPairingURL(attachURL)
+            }
         }
         return true
         #else

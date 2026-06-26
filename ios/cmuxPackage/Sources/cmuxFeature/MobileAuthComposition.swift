@@ -48,6 +48,29 @@ public struct MobileAuthComposition {
         self.reachability = reachability
 
         let isDevelopment = Self.isDevelopmentBuild
+        var launchEnvironment = environment
+        #if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        func launchArgumentValue(_ key: String) -> String? {
+            let prefix = "\(key)="
+            guard let raw = arguments.first(where: { $0.hasPrefix(prefix) }) else {
+                return nil
+            }
+            let value = String(raw.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : value
+        }
+        let forceSyncVideoAuth = launchEnvironment["CMUX_SYNC_VIDEO_FORCE_AUTH"] == "1"
+            || arguments.contains("CMUX_SYNC_VIDEO_FORCE_AUTH=1")
+        if forceSyncVideoAuth {
+            launchEnvironment["CMUX_UITEST_AUTH_FIXTURE"] = "1"
+            launchEnvironment["CMUX_UITEST_AUTH_USER_ID"] = launchEnvironment["CMUX_UITEST_AUTH_USER_ID"] ?? "cloud-sync-video"
+            launchEnvironment["CMUX_UITEST_AUTH_EMAIL"] = launchEnvironment["CMUX_UITEST_AUTH_EMAIL"]
+                ?? launchEnvironment["CMUX_UITEST_STACK_EMAIL"]
+                ?? launchArgumentValue("CMUX_UITEST_STACK_EMAIL")
+                ?? "cloud-sync-video@cmux.local"
+            launchEnvironment["CMUX_UITEST_AUTH_NAME"] = launchEnvironment["CMUX_UITEST_AUTH_NAME"] ?? "Cloud Sync Video"
+        }
+        #endif
         let overrides = Self.localConfigStringOverrides(in: bundle)
         let resolvedConfig = AuthConfig(
             environment: isDevelopment ? .development : .production,
@@ -72,9 +95,9 @@ public struct MobileAuthComposition {
             key: "auth_selected_team"
         )
         let launch = AuthLaunchOptions(
-            clearAuthRequested: environment["CMUX_UITEST_CLEAR_AUTH"] == "1",
+            clearAuthRequested: launchEnvironment["CMUX_UITEST_CLEAR_AUTH"] == "1",
             mockDataEnabled: UITestConfig.mockDataEnabled,
-            environment: environment,
+            environment: launchEnvironment,
             includesDevAuth: policy.includesFortyTwoShortcut
         )
         // Break the coordinator <-> push cycle: the coordinator is built first
