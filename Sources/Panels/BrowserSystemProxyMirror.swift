@@ -51,17 +51,21 @@ struct BrowserSystemProxyMirror: Equatable {
     /// proxy + bypass mirror, or `nil` when the active configuration cannot
     /// be represented faithfully.
     ///
-    /// The mirror fails closed: whenever any part of the system policy —
-    /// proxy routing or bypass rules — has no `ProxyConfiguration`
-    /// equivalent, no mirror is produced and WebKit keeps following the
-    /// system proxy unchanged. The one exception is the link-local CIDR
-    /// `169.254/16`, which macOS ships in the default bypass list of every
-    /// network service: treating it as blocking would disable the loopback
-    /// fix on effectively every Mac, so it is skipped instead. Literal
-    /// link-local URLs (e.g. `http://169.254.169.254` metadata endpoints)
-    /// are the only flow that loses its bypass, and only when no other
-    /// unrepresentable rule already declines the mirror — any deliberately
-    /// curated CIDR list still fails closed.
+    /// The mirror fails closed: whenever the proxy *routing* has no
+    /// `ProxyConfiguration` equivalent (PAC/WPAD, system web proxies, invalid
+    /// endpoints), no mirror is produced and WebKit keeps following the system
+    /// proxy unchanged. Two bypass-policy settings are deliberate exceptions
+    /// that do not block the mirror:
+    /// - The link-local CIDR `169.254/16`, which macOS ships in the default
+    ///   bypass list of every network service: treating it as blocking would
+    ///   disable the loopback fix on effectively every Mac, so it is skipped.
+    ///   Literal link-local URLs (e.g. `http://169.254.169.254` metadata
+    ///   endpoints) are the only flow that loses its bypass, and only when no
+    ///   other unrepresentable rule already declines the mirror — any
+    ///   deliberately curated CIDR list still fails closed.
+    /// - "Exclude simple hostnames", which a hostname-suffix list cannot
+    ///   express but which must not cost the loopback bypass (#5703); the
+    ///   mirror is still produced with the loopback family excluded.
     init?(systemProxySettings settings: [String: Any]) {
         // PAC files and WPAD evaluate a script per URL; they cannot be
         // expressed as static ProxyConfiguration values, so the system keeps
@@ -71,12 +75,18 @@ struct BrowserSystemProxyMirror: Equatable {
             return nil
         }
 
-        // "Exclude simple hostnames" bypasses every dot-less hostname; a
-        // hostname-suffix exclusion list cannot express that, so decline
-        // rather than silently routing those hosts to the proxy.
-        guard !Self.isEnabled(kCFNetworkProxiesExcludeSimpleHostnames, in: settings) else {
-            return nil
-        }
+        // "Exclude simple hostnames" bypasses every dot-less hostname, which a
+        // hostname-suffix exclusion list cannot express. But declining the
+        // whole mirror over it throws away the loopback bypass this mirror
+        // exists to provide (#5703): dot-less `localhost` is bypassed by the
+        // system and keeps working, while dotted `*.localhost` subdomains stay
+        // routed to the proxy and local dev servers become unreachable. The
+        // implicit exclusions already cover the loopback family — and
+        // Network.framework treats `"localhost"` as a suffix that also matches
+        // `*.localhost` — so keep mirroring with loopback excluded and accept
+        // that the few non-loopback dot-less hosts follow the proxy. Preserving
+        // the loopback bypass (the mirror's entire purpose, matching Chromium's
+        // implicit rules) outweighs approximating a rarely-load-bearing setting.
 
         // System web proxies are forward-proxy settings. Mapping them to
         // `ProxyConfiguration(httpCONNECTProxy:)` would force CONNECT
