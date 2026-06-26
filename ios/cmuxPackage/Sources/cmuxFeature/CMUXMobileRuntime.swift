@@ -181,10 +181,19 @@ struct MobileShellDevStackAuthTokenProvider {
     static let environmentKey = "CMUX_MOBILE_DEV_STACK_AUTH_TOKEN"
 
     static func token(
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        arguments: [String] = ProcessInfo.processInfo.arguments
     ) -> String? {
         let token = environment[environmentKey]?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return token?.isEmpty == false ? token : nil
+        if token?.isEmpty == false {
+            return token
+        }
+        let prefix = "\(environmentKey)="
+        let argumentToken = arguments
+            .first { $0.hasPrefix(prefix) }?
+            .dropFirst(prefix.count)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return argumentToken?.isEmpty == false ? argumentToken : nil
     }
 }
 #endif

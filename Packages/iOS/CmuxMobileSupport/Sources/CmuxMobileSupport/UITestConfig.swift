@@ -46,6 +46,7 @@ public struct UITestConfig {
     /// real-backend auto-pair path to fire. DEBUG-only; always `nil` in release.
     public static var dogfoodAttachURL: String? {
         dogfoodAttachURL(from: ProcessInfo.processInfo.environment)
+            ?? argumentValue(for: "CMUX_DOGFOOD_ATTACH_URL")
     }
 
     /// The dogfood attach URL for an explicit environment, not gated on mock data.
@@ -159,5 +160,18 @@ public struct UITestConfig {
 
     private static func value(for key: String) -> String? {
         value(for: key, env: ProcessInfo.processInfo.environment)
+    }
+
+    private static func argumentValue(for key: String) -> String? {
+        #if DEBUG
+        let prefix = "\(key)="
+        guard let raw = ProcessInfo.processInfo.arguments.first(where: { $0.hasPrefix(prefix) }) else {
+            return nil
+        }
+        let value = String(raw.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? nil : value
+        #else
+        return nil
+        #endif
     }
 }
