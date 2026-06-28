@@ -142912,6 +142912,57 @@
         }
       }
     },
+    "remoteTmux.upload.failed.title": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Upload failed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アップロードに失敗しました"
+          }
+        }
+      }
+    },
+    "remoteTmux.upload.tooLarge": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file is too large to upload to this host. Files over %lld MB need a second SSH connection, which this host doesn't allow."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このファイルは大きすぎてこのホストにアップロードできません。%lld MB を超えるファイルには2つ目の SSH 接続が必要ですが、このホストでは許可されていません。"
+          }
+        }
+      }
+    },
+    "remoteTmux.upload.fallbackFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This file is too large to send over the tmux connection (over %1$lld MB), and the scp fallback failed: %2$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このファイルは大きすぎて tmux 接続では送信できません（%1$lld MB 超）。scp による代替アップロードも失敗しました: %2$@"
+          }
+        }
+      }
+    },
     "remoteTmux.tab.window": {
       "extractionState": "manual",
       "localizations": {
