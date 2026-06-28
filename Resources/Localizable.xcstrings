@@ -142402,6 +142402,1085 @@
         }
       }
     },
+    "settings.betaFeatures.remoteTmux": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote tmux"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモート tmux"
+          }
+        }
+      }
+    },
+    "settings.betaFeatures.remoteTmux.subtitleOff": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hides remote tmux mirroring until you enable it here."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ここで有効にするまで、リモート tmux のミラーリングを表示しません。"
+          }
+        }
+      }
+    },
+    "settings.betaFeatures.remoteTmux.subtitleOn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mirrors a remote host's tmux sessions in the sidebar over ssh tmux -CC; sessions become workspaces and windows become tabs. Quitting cmux leaves the remote tmux server running."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ssh tmux -CC でリモートホストの tmux セッションをサイドバーにミラーリングします。セッションはワークスペースに、ウィンドウはタブになります。cmux を終了してもリモートの tmux サーバーは動作し続けます。"
+          }
+        }
+      }
+    },
+    "settings.betaFeatures.remoteTmuxLinkedView": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote tmux linked view"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモート tmux リンクビュー"
+          }
+        }
+      }
+    },
+    "settings.betaFeatures.remoteTmuxLinkedView.subtitleOn": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mirrors a host's tmux sessions over a single ssh connection by linking every session's windows into one cmux-owned view. Use for hosts that allow only one session per connection (e.g. per-connection 2FA). Requires Remote tmux."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 つの ssh 接続で、各セッションのウィンドウを cmux 専用のビューにリンクして、ホストの tmux セッションをミラーリングします。1 接続につき 1 セッションのみ許可するホスト（例: 接続ごとの 2 要素認証）で使用します。リモート tmux が必要です。"
+          }
+        }
+      }
+    },
+    "settings.betaFeatures.remoteTmuxLinkedView.subtitleOff": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uses a separate ssh connection per remote tmux session until you enable this. Requires Remote tmux."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "有効にするまで、リモート tmux セッションごとに個別の ssh 接続を使用します。リモート tmux が必要です。"
+          }
+        }
+      }
+    },
+    "remoteTmux.tab.pane": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "tmux pane"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "tmux ペイン"
+          }
+        }
+      }
+    },
+    "remoteTmux.tab.window": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "tmux window"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "tmux ウィンドウ"
+          }
+        }
+      }
+    },
+    "remoteTmux.pane.splitRight": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Split Right"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "右に分割"
+          }
+        }
+      }
+    },
+    "remoteTmux.pane.splitDown": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Split Down"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下に分割"
+          }
+        }
+      }
+    },
+    "remoteTmux.pane.close": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close Pane"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ペインを閉じる"
+          }
+        }
+      }
+    },
+    "remoteTmux.error.commandFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "remote command failed (exit %d)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモートコマンドに失敗しました（終了コード %d）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "远程命令失败（退出代码 %d）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "遠端命令失敗（結束代碼 %d）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원격 명령이 실패했습니다(종료 코드 %d)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote-Befehl fehlgeschlagen (Exit-Code %d)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El comando remoto falló (código de salida %d)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La commande distante a échoué (code de sortie %d)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comando remoto non riuscito (codice di uscita %d)"
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fjernkommandoen mislykkedes (afslutningskode %d)"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Polecenie zdalne nie powiodło się (kod zakończenia %d)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаленная команда завершилась с ошибкой (код выхода %d)"
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Udaljena komanda nije uspjela (izlazni kod %d)"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "فشل الأمر البعيد (رمز الخروج %d)"
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekstern kommando mislyktes (avslutningskode %d)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O comando remoto falhou (código de saída %d)"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "คำสั่งระยะไกลล้มเหลว (รหัสออก %d)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uzak komut başarısız oldu (çıkış kodu %d)"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Віддалена команда завершилася з помилкою (код виходу %d)"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ពាក្យ​បញ្ជា​ពីចម្ងាយ​បាន​បរាជ័យ (កូដ​ចេញ %d)"
+          }
+        }
+      }
+    },
+    "remoteTmux.error.commandFailedWithDetail": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "remote command failed (exit %d): %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモートコマンドに失敗しました（終了コード %d）: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "远程命令失败（退出代码 %d）：%@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "遠端命令失敗（結束代碼 %d）：%@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원격 명령이 실패했습니다(종료 코드 %d): %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote-Befehl fehlgeschlagen (Exit-Code %d): %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El comando remoto falló (código de salida %d): %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La commande distante a échoué (code de sortie %d) : %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Comando remoto non riuscito (codice di uscita %d): %@"
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fjernkommandoen mislykkedes (afslutningskode %d): %@"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Polecenie zdalne nie powiodło się (kod zakończenia %d): %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаленная команда завершилась с ошибкой (код выхода %d): %@"
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Udaljena komanda nije uspjela (izlazni kod %d): %@"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "فشل الأمر البعيد (رمز الخروج %d): %@"
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekstern kommando mislyktes (avslutningskode %d): %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O comando remoto falhou (código de saída %d): %@"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "คำสั่งระยะไกลล้มเหลว (รหัสออก %d): %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uzak komut başarısız oldu (çıkış kodu %d): %@"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Віддалена команда завершилася з помилкою (код виходу %d): %@"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ពាក្យ​បញ្ជា​ពីចម្ងាយ​បាន​បរាជ័យ (កូដ​ចេញ %d): %@"
+          }
+        }
+      }
+    },
+    "remoteTmux.error.controlSocketPathTooLong": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH control socket path is too long for a Unix domain socket (%lld > %lld bytes); home directory path is too long"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH 制御ソケットパスが Unix ドメインソケットには長すぎます（%lld > %lld バイト）。ホームディレクトリのパスが長すぎます"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH 控制套接字路径对于 Unix 域套接字过长（%lld > %lld 字节）；主目录路径过长"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH 控制通訊端路徑對 Unix 網域通訊端而言太長（%lld > %lld 位元組）；主目錄路徑太長"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH 제어 소켓 경로가 Unix 도메인 소켓에 너무 깁니다(%lld > %lld바이트). 홈 디렉터리 경로가 너무 깁니다"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der SSH-Steuer-Socket-Pfad ist für einen Unix-Domain-Socket zu lang (%lld > %lld Byte); der Pfad zum Home-Verzeichnis ist zu lang"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La ruta del socket de control SSH es demasiado larga para un socket de dominio Unix (%lld > %lld bytes); la ruta del directorio de inicio es demasiado larga"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le chemin du socket de contrôle SSH est trop long pour un socket de domaine Unix (%lld > %lld octets) ; le chemin du dossier de départ est trop long"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il percorso del socket di controllo SSH è troppo lungo per un socket di dominio Unix (%lld > %lld byte); il percorso della directory home è troppo lungo"
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH-kontrolsocketstien er for lang til en Unix-domænesocket (%lld > %lld byte); stien til hjemmemappen er for lang"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ścieżka gniazda sterującego SSH jest za długa dla gniazda domeny Unix (%lld > %lld bajtów); ścieżka katalogu domowego jest za długa"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Путь к управляющему сокету SSH слишком длинный для доменного сокета Unix (%lld > %lld байт); путь к домашнему каталогу слишком длинный"
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Putanja SSH kontrolnog socketa je preduga za Unix domenski socket (%lld > %lld bajtova); putanja kućnog direktorija je preduga"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "مسار مقبس تحكم SSH طويل جدًا لمقبس نطاق Unix (%lld > %lld بايت)؛ مسار دليل المنزل طويل جدًا"
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH-kontrollsocketbanen er for lang for en Unix-domenesocket (%lld > %lld byte); banen til hjemmemappen er for lang"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O caminho do soquete de controle SSH é longo demais para um soquete de domínio Unix (%lld > %lld bytes); o caminho do diretório inicial é longo demais"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "พาธซ็อกเก็ตควบคุม SSH ยาวเกินไปสำหรับซ็อกเก็ตโดเมน Unix (%lld > %lld ไบต์); พาธไดเรกทอรีโฮมยาวเกินไป"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH denetim soketi yolu Unix etki alanı soketi için çok uzun (%lld > %lld bayt); ana dizin yolu çok uzun"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Шлях до керівного сокета SSH задовгий для доменного сокета Unix (%lld > %lld байтів); шлях до домашнього каталогу задовгий"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ផ្លូវ​សុកកែត​ត្រួតពិនិត្យ SSH វែងពេក​សម្រាប់​សុកកែត​ដែន Unix (%lld > %lld បៃ); ផ្លូវ​ថត​ផ្ទះ​វែងពេក"
+          }
+        }
+      }
+    },
+    "remoteTmux.error.launchFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "failed to launch SSH: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH の起動に失敗しました: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法启动 SSH：%@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法啟動 SSH：%@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH를 시작하지 못했습니다: %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH konnte nicht gestartet werden: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo iniciar SSH: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible de lancer SSH : %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile avviare SSH: %@"
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kunne ikke starte SSH: %@"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nie udało się uruchomić SSH: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не удалось запустить SSH: %@"
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nije moguće pokrenuti SSH: %@"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "تعذر تشغيل SSH: %@"
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kunne ikke starte SSH: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não foi possível iniciar o SSH: %@"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถเปิดใช้ SSH ได้: %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SSH başlatılamadı: %@"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося запустити SSH: %@"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "មិន​អាច​បើកដំណើរការ SSH បានទេ: %@"
+          }
+        }
+      }
+    },
+    "remoteTmux.error.unreachable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "host unreachable: %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホストに到達できません: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法访问主机：%@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "無法連線到主機：%@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "호스트에 연결할 수 없습니다: %@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Host nicht erreichbar: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se puede acceder al host: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hôte inaccessible : %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Host non raggiungibile: %@"
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Værten kan ikke nås: %@"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Host jest nieosiągalny: %@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хост недоступен: %@"
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Host nije dostupan: %@"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يتعذر الوصول إلى المضيف: %@"
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verten kan ikke nås: %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Host inacessível: %@"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่สามารถเข้าถึงโฮสต์ได้: %@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ana makineye ulaşılamıyor: %@"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хост недоступний: %@"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "មិន​អាច​ចូល​ដល់​ម៉ាស៊ីន​បានទេ: %@"
+          }
+        }
+      }
+    },
+    "remoteTmux.error.unsupportedVersion": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "remote session server is too old (found %@; cmux needs version %@ or newer)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモートセッションサーバーが古すぎます（検出: %@、cmux にはバージョン %@ 以降が必要です）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "远程会话服务器过旧（检测到 %@；cmux 需要版本 %@ 或更高版本）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "遠端工作階段伺服器太舊（偵測到 %@；cmux 需要版本 %@ 或更新版本）"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "원격 세션 서버가 너무 오래되었습니다(감지됨: %@, cmux에는 버전 %@ 이상이 필요함)"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Der Remote-Sitzungsserver ist zu alt (gefunden: %@; cmux benötigt Version %@ oder neuer)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "El servidor de sesión remota es demasiado antiguo (se encontró %@; cmux necesita la versión %@ o posterior)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le serveur de session distant est trop ancien (version détectée : %@ ; cmux nécessite la version %@ ou ultérieure)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il server di sessione remoto è troppo vecchio (trovato %@; cmux richiede la versione %@ o successiva)"
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Den eksterne sessionsserver er for gammel (fandt %@; cmux kræver version %@ eller nyere)"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zdalny serwer sesji jest za stary (wykryto %@; cmux wymaga wersji %@ lub nowszej)"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Удаленный сервер сеансов слишком старый (обнаружено %@; cmux требуется версия %@ или новее)"
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Udaljeni server sesije je prestar (pronađeno %@; cmux zahtijeva verziju %@ ili noviju)"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "خادم الجلسة البعيد قديم جدًا (تم العثور على %@؛ يتطلب cmux الإصدار %@ أو أحدث)"
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Den eksterne øktserveren er for gammel (fant %@; cmux krever versjon %@ eller nyere)"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O servidor de sessão remota é antigo demais (encontrado %@; o cmux precisa da versão %@ ou mais recente)"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "เซิร์ฟเวอร์เซสชันระยะไกลเก่าเกินไป (พบ %@; cmux ต้องใช้เวอร์ชัน %@ หรือใหม่กว่า)"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uzak oturum sunucusu çok eski (bulunan %@; cmux sürüm %@ veya daha yenisini gerektirir)"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Віддалений сервер сеансів застарий (виявлено %@; cmux потребує версії %@ або новішої)"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ម៉ាស៊ីនបម្រើ​សម័យ​ពីចម្ងាយ​ចាស់​ពេក (បាន​រកឃើញ %@; cmux ត្រូវការ​កំណែ %@ ឬ​ថ្មី​ជាងនេះ)"
+          }
+        }
+      }
+    },
+    "remoteTmux.version.unknown": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "unknown"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不明"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未知"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未知"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "알 수 없음"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "unbekannt"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "desconocida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "inconnue"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "sconosciuta"
+          }
+        },
+        "da": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ukendt"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nieznana"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "неизвестно"
+          }
+        },
+        "bs": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "nepoznato"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "غير معروف"
+          }
+        },
+        "nb": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ukjent"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "desconhecida"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่ทราบ"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "bilinmiyor"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "невідомо"
+          }
+        },
+        "km": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "មិន​ស្គាល់"
+          }
+        }
+      }
+    },
+    "sidebar.extensions.action.remoteTmuxWindowRequested": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remote tmux window requested"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リモート tmux ウィンドウを要求しました"
+          }
+        }
+      }
+    },
     "settings.betaFeatures.dock": {
       "extractionState": "manual",
       "localizations": {
