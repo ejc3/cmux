@@ -142963,6 +142963,27 @@
         }
       }
     },
+    "remoteTmux.upload.unreadable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Couldn't read %@ to upload it." } },
+        "ja": { "stringUnit": { "state": "translated", "value": "%@ を読み取れず、アップロードできませんでした。" } }
+      }
+    },
+    "remoteTmux.upload.streamFailed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Upload of %@ failed over the tmux connection (the connection dropped or the transfer didn't verify). Try again." } },
+        "ja": { "stringUnit": { "state": "translated", "value": "%@ のアップロードが tmux 接続経由で失敗しました（接続が切れたか、転送を検証できませんでした）。もう一度お試しください。" } }
+      }
+    },
+    "remoteTmux.upload.noMirror": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": { "stringUnit": { "state": "translated", "value": "Couldn't upload: this remote tmux mirror is no longer connected." } },
+        "ja": { "stringUnit": { "state": "translated", "value": "アップロードできませんでした: このリモート tmux ミラーは接続されていません。" } }
+      }
+    },
     "remoteTmux.tab.window": {
       "extractionState": "manual",
       "localizations": {
