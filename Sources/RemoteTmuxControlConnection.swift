@@ -65,6 +65,27 @@ final class RemoteTmuxControlConnection {
     private(set) var activePaneByWindow: [Int: Int] = [:]
     private(set) var paneOutputByteCounts: [Int: Int] = [:]
     private(set) var totalOutputBytes = 0
+    /// Per-pane `paneOutputByteCounts` snapshot taken when a `capture-pane` seed is
+    /// REQUESTED. If the count moved by the time the result lands, live `%output`
+    /// raced the round-trip — the pane was actively redrawing (e.g. a freshly-started
+    /// shell still painting its first prompt), so the captured grid AND its cursor are
+    /// already stale. Painting that stale seed both double-draws the prompt and strands
+    /// zsh's `PROMPT_SP` "%" at the seeded cursor (col > 0, so it can't self-erase). We
+    /// re-seed instead; see the `.capturePane` handler.
+    private var paneSeedByteBaseline: [Int: Int] = [:]
+    /// Per-pane count of consecutive raced re-seeds, bounded by ``maxPaneSeedRetries``
+    /// so a continuously-streaming pane can't loop. While > 0 for a pane, the matching
+    /// `.paneState` cursor restore is skipped (it would be the same stale cursor).
+    private var paneSeedRetries: [Int: Int] = [:]
+    private static let maxPaneSeedRetries = 2
+    /// Captured rows awaiting paint. The capture paint is deferred from `.capturePane`
+    /// to `.paneState` so `pane_height` (only in the `.paneState` reply) is available to
+    /// pad the seed for top-alignment (see `capturePaneSeedSequence`).
+    private var pendingPaneSeedRows: [Int: [String]] = [:]
+    /// Panes whose seed was skipped because the mirror surface was SHORTER than the
+    /// captured pane (the visible rows don't fit). Re-captured once the pane's height
+    /// settles to the surface, via `%layout-change` (see `reseedGeometrySettledPanes`).
+    private var pendingGeometrySettleReseedPanes: Set<Int> = []
     /// Last-known foreground classification per pane, kept current by the same
     /// one-shot query + live subscription that drive reflow classification
     /// (`#{alternate_on}` + `#{pane_current_command}`, see
@@ -452,6 +473,10 @@ final class RemoteTmuxControlConnection {
     func resizeWindow(windowId: Int, columns: Int, rows: Int) {
         guard columns > 0, rows > 0 else { return }
         pendingWindowSizes[windowId] = (columns, rows)
+        // The surface height for this window is now known — re-seed any pane whose seed
+        // was deferred waiting for it (e.g. the first seed at mount, before the rendered
+        // size was reported).
+        reseedDeferredPanes(inWindow: windowId)
         guard connectionState == .connected else { return }
         windowResizeDebounceTask?.cancel()
         windowResizeDebounceTask = Task { @MainActor [weak self] in
@@ -504,6 +529,9 @@ final class RemoteTmuxControlConnection {
         // connected — while reconnecting/ended there is no live stdin (the send would
         // silently drop); `reseedAfterReconnect` re-applies the stored size.
         lastClientSize = (columns, rows)
+        // The shared client height is now known — re-seed any pane whose seed was
+        // deferred waiting for it (single-client mirrors have no per-window signal).
+        reseedAllDeferredPanes()
         guard connectionState == .connected else { return }
         // Coalesce the layout-settle oscillation into a single send: (re)arm a short
         // trailing timer; only the last size in a burst actually goes out. The fired
@@ -665,6 +693,9 @@ final class RemoteTmuxControlConnection {
         // comes from LIVE %output (which already carries real soft-wraps), not from
         // the seed — so `-J`'s only upside (pre-attach rejoin-on-grow) isn't worth
         // corrupting every TUI seed. Capture faithful visual rows instead.
+        // Snapshot the live-output counter so the result handler can tell whether the
+        // pane redrew during this round-trip (a raced, stale seed). See the field doc.
+        paneSeedByteBaseline[paneId] = paneOutputByteCounts[paneId, default: 0]
         sendInternal("capture-pane -p -e -S -\(Self.scrollbackCaptureLines) -t %\(paneId)", kind: .capturePane(paneId))
         // Query the pane's terminal STATE; tmux exposes it all as formats. Sent
         // after capture-pane so it applies on top of the painted rows (the seed
@@ -1264,7 +1295,11 @@ final class RemoteTmuxControlConnection {
         scheduleAttachRedrawKickIfNeeded()
         for window in windowsByID.values {
             for paneId in window.paneIDsInOrder {
-                observers.emitPaneOutput(paneId, Data("\u{1b}[H\u{1b}[2J\u{1b}[3J".utf8))
+                // Blank the stale screen + scrollback immediately on reconnect (before
+                // the async capture-pane round-trip repaints), using the shared escape
+                // the seed paint also emits.
+                observers.emitPaneOutput(
+                    paneId, Data(RemoteTmuxControlMessageDecoding.homeClearScreenAndScrollback.utf8))
                 seedPane(paneId: paneId)
             }
         }
@@ -1322,6 +1357,15 @@ final class RemoteTmuxControlConnection {
             applySessionNameChange(sessionId: id, name: renameName, event: "session-renamed", refetchWindows: false)
         case .sessionsChanged:
             record("sessions-changed")
+            // The session SET changed — a home session was created or destroyed
+            // out-of-band (e.g. `tmux kill-session` outside cmux, or the last shell
+            // in it exiting). The linked-view coordinator must re-plan: when a home
+            // session dies its window stays linked (orphaned) in the view session, so
+            // its death is NOT a `%window-close` on this stream and would otherwise
+            // leave a dead mirror workspace lingering until some unrelated topology
+            // event. Reconciles are debounced + serialized downstream, so the extra
+            // notify is cheap.
+            observers.notifyTopologyChanged()
         case let .windowAdd(id):
             record("window-add @\(id)")
             requestWindows()
@@ -1521,28 +1565,53 @@ final class RemoteTmuxControlConnection {
                 scheduleAttachRedrawKickIfNeeded()
             }
         case let .capturePane(paneId):
-            // capture-pane -e -S output is the pane's history + visible rows (with
-            // SGR escapes). Home + clear the VISIBLE SCREEN (ESC[2J — NOT ESC[3J,
-            // which would erase the scrollback we are seeding), then write every
-            // captured row joined by CR LF: rows that overflow the screen scroll up
-            // into the surface's scrollback buffer, which is what makes the mirrored
-            // tab scrollable from the start. The last row (the visible bottom) gets
-            // no trailing newline so the cursor lands at its END, lining up with
-            // tmux's real prompt cursor — otherwise echoed input lands a line below
-            // the prompt. The `.paneState` seed then repositions the cursor within
-            // the visible screen.
-            let painted = "\u{1b}[H\u{1b}[2J" + lines.joined(separator: "\r\n")
-            if let data = painted.data(using: .utf8) {
-                observers.emitPaneOutput(paneId, data)
-            }
+            // Stash the captured rows; the actual paint is deferred to `.paneState`,
+            // which is the first point we know `pane_height` — needed to pad the seed so
+            // the captured scrollback scrolls into the surface's scrollback and the
+            // visible rows land top-aligned (see capturePaneSeedSequence). `.paneState`
+            // follows this in the command FIFO, so the wait is one reply.
+            pendingPaneSeedRows[paneId] = lines
         case let .paneState(paneId):
+            guard let line = lines.first else { pendingPaneSeedRows[paneId] = nil; break }
+            // If live %output raced the seed round-trip (capture + state), the pane was
+            // actively redrawing (e.g. a freshly-started shell still painting its first
+            // prompt) so the captured grid + cursor are stale. Painting them strands
+            // zsh's PROMPT_SP "%" and double-draws. Re-seed (bounded) instead; the
+            // live-rendered bytes already on the surface stay visible meanwhile.
+            if paneOutputByteCounts[paneId, default: 0] > (paneSeedByteBaseline[paneId] ?? 0),
+               paneSeedRetries[paneId, default: 0] < Self.maxPaneSeedRetries {
+                paneSeedRetries[paneId, default: 0] += 1
+                pendingPaneSeedRows[paneId] = nil
+                capturePane(paneId: paneId)
+                break
+            }
+            paneSeedRetries[paneId] = 0
+            let paneHeight = decoding.paneHeight(from: line)
+            let surfaceHeight = desiredSurfaceRows(forPaneId: paneId)
+            // Only paint when we know the surface height AND it is >= the captured pane
+            // height, so the (H-P)-row pad pushes the captured scrollback into the
+            // surface's scrollback and the visible rows land top-aligned (where the
+            // absolute cursor restore expects them). The surface height is unknown right
+            // after mount (before the rendered size is reported) and can be shorter than
+            // the pane mid-resize; in both cases defer and re-seed once the pane fits the
+            // surface (resizeWindow / setClientSize / %layout-change). Live %output keeps
+            // the surface populated meanwhile.
+            guard let paneHeight, let surfaceHeight, surfaceHeight >= paneHeight else {
+                pendingPaneSeedRows[paneId] = nil
+                pendingGeometrySettleReseedPanes.insert(paneId)
+                break
+            }
+            // Paint the capture (padded so the visible rows top-align) THEN the cursor —
+            // both in one go now that pane_height is known.
+            if let rows = pendingPaneSeedRows.removeValue(forKey: paneId) {
+                observers.emitPaneOutput(paneId, decoding.capturePaneSeedSequence(
+                    rows: rows, paneHeight: paneHeight, surfaceHeight: surfaceHeight))
+            }
             // Restore the pane's terminal state (scroll region + DEC modes + cursor)
             // onto the mirror surface, applied after the capture paint. The scroll
             // region (DECSTBM) is the important one: without it an inline TUI's
             // region-relative redraws land on the wrong rows even at a static size.
-            if let line = lines.first {
-                observers.emitPaneOutput(paneId, decoding.paneStateSeedSequence(from: line))
-            }
+            observers.emitPaneOutput(paneId, decoding.paneStateSeedSequence(from: line))
         case let .panePath(paneId):
             if let path = lines.first?.trimmingCharacters(in: .whitespaces), !path.isEmpty {
                 observers.emitPaneCwd(paneId, path)
@@ -1591,11 +1660,53 @@ final class RemoteTmuxControlConnection {
         )
         if !windowOrder.contains(windowId) { windowOrder.append(windowId) }
         prunePaneState(keeping: Set(windowsByID.values.flatMap { $0.paneIDsInOrder }))
+        reseedDeferredPanes(inWindow: windowId)
+    }
+
+    /// Desired surface (rendered) height in rows that cmux is driving a window to —
+    /// per-window mirrors track it in `pendingWindowSizes`; the single shared client
+    /// uses `lastClientSize`. `nil` until the surface has reported its size.
+    private func desiredSurfaceRows(forWindow windowId: Int) -> Int? {
+        pendingWindowSizes[windowId]?.rows ?? appliedWindowSizes[windowId]?.rows ?? lastClientSize?.rows
+    }
+
+    private func desiredSurfaceRows(forPaneId paneId: Int) -> Int? {
+        guard let windowId = windowsByID.first(where: { $0.value.paneIDsInOrder.contains(paneId) })?.key else {
+            return lastClientSize?.rows
+        }
+        return desiredSurfaceRows(forWindow: windowId)
+    }
+
+    /// Re-seed panes whose paint was deferred (surface height unknown at mount, or
+    /// shorter than the captured pane mid-resize) once the pane fits the surface
+    /// (`desired rows >= pane height`) — only then does the padded seed render
+    /// correctly. Gated on fit + removed from the set on fire, so a resize burst can't
+    /// storm captures (it re-seeds at most once per pane per settle).
+    private func reseedDeferredPanes(inWindow windowId: Int) {
+        guard !pendingGeometrySettleReseedPanes.isEmpty,
+              let surfaceRows = desiredSurfaceRows(forWindow: windowId),
+              let paneRows = windowsByID[windowId]?.height, surfaceRows >= paneRows else { return }
+        let toReseed = pendingGeometrySettleReseedPanes.intersection(
+            Set(windowsByID[windowId]?.paneIDsInOrder ?? []))
+        guard !toReseed.isEmpty else { return }
+        pendingGeometrySettleReseedPanes.subtract(toReseed)
+        for paneId in toReseed { capturePane(paneId: paneId) }
+    }
+
+    /// Re-seed every deferred pane that now fits its surface — used when the shared
+    /// client size becomes known (`setClientSize`), which has no per-window signal.
+    private func reseedAllDeferredPanes() {
+        guard !pendingGeometrySettleReseedPanes.isEmpty else { return }
+        for windowId in windowsByID.keys { reseedDeferredPanes(inWindow: windowId) }
     }
 
     private func prunePaneState(keeping livePanes: Set<Int>) {
         paneOutputByteCounts = paneOutputByteCounts.filter { livePanes.contains($0.key) }
         paneForegroundStates = paneForegroundStates.filter { livePanes.contains($0.key) }
+        pendingPaneSeedRows = pendingPaneSeedRows.filter { livePanes.contains($0.key) }
+        pendingGeometrySettleReseedPanes = pendingGeometrySettleReseedPanes.filter { livePanes.contains($0) }
+        paneSeedByteBaseline = paneSeedByteBaseline.filter { livePanes.contains($0.key) }
+        paneSeedRetries = paneSeedRetries.filter { livePanes.contains($0.key) }
     }
 
     private func record(_ event: String) {
