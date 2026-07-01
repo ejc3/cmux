@@ -735,3 +735,36 @@ import Testing
         #expect(activity.activeCommandName == nil)
     }
 }
+
+/// Regression for the multiplexer seed-height shift (a linked-view render bug found by the
+/// runtime render harness: mirror content shifted DOWN by `client − window` rows, losing
+/// the top history lines).
+///
+/// GA sizes the shared control client (`refresh-client -C`), so a window's seed surface
+/// height IS the client height. The multiplexed transport sizes each window independently
+/// (`resize-window`), so the seed surface height must be the WINDOW's own requested size —
+/// otherwise the top-align seed padding (`surface − pane` blank rows) over-pads by the
+/// view client's extra rows (a 40-row view client vs a 37-row window → 3 lost top rows).
+/// `desiredSurfaceRows(forWindow:)` must therefore prefer the per-window size.
+@Suite @MainActor struct RemoteTmuxSeedSurfaceHeightTests {
+    private func connection() -> RemoteTmuxControlConnection {
+        RemoteTmuxControlConnection(host: RemoteTmuxHost(destination: "user@host"), sessionName: "work")
+    }
+
+    @Test func perWindowSizeWinsOverClientSizeForSeedSurface() {
+        let c = connection()
+        c.setClientSize(columns: 120, rows: 40)             // shared view client
+        c.resizeWindow(windowId: 7, columns: 97, rows: 37)  // multiplexed per-window size
+        #expect(c.desiredSurfaceRows(forWindow: 7) == 37)   // the window's own height — the fix
+        #expect(c.desiredSurfaceRows(forWindow: 99) == 40)  // unknown window → client fallback
+        #expect(c.desiredSurfaceRows(forWindow: nil) == 40) // GA (no window) → client
+    }
+
+    @Test func clientSizeUsedWhenNoPerWindowSize() {
+        // GA path: resizeWindow is never called, so every window uses the client size.
+        let c = connection()
+        c.setClientSize(columns: 100, rows: 30)
+        #expect(c.desiredSurfaceRows(forWindow: 1) == 30)
+        #expect(c.desiredSurfaceRows() == 30)
+    }
+}

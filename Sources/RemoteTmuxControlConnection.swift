@@ -1591,18 +1591,18 @@ final class RemoteTmuxControlConnection {
             }
             paneSeedRetries[paneId] = 0
             let paneHeight = decoding.paneHeight(from: line)
-            let surfaceHeight = desiredSurfaceRows()
+            let seedWindow = windowsByID.values.first { $0.paneIDsInOrder.contains(paneId) }
+            let surfaceHeight = desiredSurfaceRows(forWindow: seedWindow?.id)
             // Top-align padding (`surface - pane` blank rows) is only correct for a
-            // single-pane window, where the shared-client surface height IS the pane's
-            // rendered height (matching the mount path's `shouldSeedSinglePaneDisplay`).
-            // In a split the pane is shorter than the client, so padding would scroll the
-            // captured content off-screen — and a pane whose height tmux didn't report
-            // (or reported implausibly) has no valid pad. Such panes paint UNPADDED
-            // rather than over-padding or deferring forever; only a single-pane window
-            // with a known pane height defers. `reseedAfterReconnect` re-seeds EVERY pane,
-            // so multi-pane panes reach here (the mount path seeds single-pane only).
-            let isSinglePaneWindow = windowsByID.values
-                .first { $0.paneIDsInOrder.contains(paneId) }?.paneIDsInOrder.count == 1
+            // single-pane window, where the surface height IS the pane's rendered height
+            // (matching the mount path's `shouldSeedSinglePaneDisplay`). In a split the
+            // pane is shorter than the surface, so padding would scroll the captured
+            // content off-screen — and a pane whose height tmux didn't report (or reported
+            // implausibly) has no valid pad. Such panes paint UNPADDED rather than
+            // over-padding or deferring forever; only a single-pane window with a known
+            // pane height defers. `reseedAfterReconnect` re-seeds EVERY pane, so multi-pane
+            // panes reach here (the mount path seeds single-pane only).
+            let isSinglePaneWindow = seedWindow?.paneIDsInOrder.count == 1
             var padPane: Int?, padSurface: Int?
             var reseedAfterReflow = false
             if isSinglePaneWindow, let paneHeight {
@@ -1716,12 +1716,22 @@ final class RemoteTmuxControlConnection {
         reseedDeferredPanes(inWindow: windowId)
     }
 
-    /// Desired surface (rendered) height in rows that cmux is driving the mirror to. The
-    /// per-session mirror sizes the shared control client (`refresh-client -C`), so every
-    /// window/pane surface tracks `lastClientSize`. `nil` until the surface has reported
-    /// its size.
-    private func desiredSurfaceRows() -> Int? {
-        lastClientSize?.rows
+    /// Desired surface (rendered) height in rows that cmux is driving a window's mirror to.
+    ///
+    /// GA sizes the shared control client (`refresh-client -C`), so every window's surface
+    /// tracks `lastClientSize`. The multiplexed transport instead sizes each window
+    /// independently via `resize-window` (see ``resizeWindow(windowId:columns:rows:)``),
+    /// so a window's surface height is ITS OWN requested size — not the shared client's,
+    /// which is the hidden view session's (e.g. 40) and would over-pad the seed by
+    /// `client − window` rows (the linked-view seed shift). GA never calls `resizeWindow`,
+    /// so the per-window maps are empty and this falls back to the client size unchanged.
+    /// `nil` until a size has been reported. Internal (not private) so the multiplexer
+    /// per-window-vs-client seed-height contract is directly unit-testable.
+    func desiredSurfaceRows(forWindow windowId: Int? = nil) -> Int? {
+        if let windowId, let rows = (pendingWindowSizes[windowId] ?? appliedWindowSizes[windowId])?.rows {
+            return rows
+        }
+        return lastClientSize?.rows
     }
 
     /// Re-capture panes queued for a geometry re-seed (surface unknown at mount, or a
@@ -1731,7 +1741,7 @@ final class RemoteTmuxControlConnection {
     /// `.paneState` re-queue is height-change-gated, so a pinned pane can't storm.
     private func reseedDeferredPanes(inWindow windowId: Int) {
         guard !pendingGeometrySettleReseedPanes.isEmpty,
-              let surfaceRows = desiredSurfaceRows(),
+              let surfaceRows = desiredSurfaceRows(forWindow: windowId),
               let paneRows = windowsByID[windowId]?.height, surfaceRows >= paneRows else { return }
         let toReseed = pendingGeometrySettleReseedPanes.intersection(
             Set(windowsByID[windowId]?.paneIDsInOrder ?? []))
