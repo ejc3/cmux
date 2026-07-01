@@ -88,10 +88,28 @@ final class RemoteTmuxSessionChannel: RemoteTmuxSessionSource {
     var connectionState: RemoteTmuxConnectionState { underlying.connectionState }
     var exited: Bool { underlying.exited }
     var sessionId: Int? { scopedSessionId }
-    var windowsByID: [Int: RemoteTmuxWindow] { underlying.windowsByID.filter { windowIds.contains($0.key) } }
+    // These build from this session's OWN ids (windowIds / ownedPaneIds), not a filter
+    // over the full shared map, so each read is O(this session's windows) rather than
+    // O(all host windows). That keeps a topology fan-out across N channels O(total
+    // windows) instead of O(N × total). Result is identical to filtering the full map.
+    var windowsByID: [Int: RemoteTmuxWindow] {
+        var result: [Int: RemoteTmuxWindow] = [:]
+        for id in windowIds { if let window = underlying.windowsByID[id] { result[id] = window } }
+        return result
+    }
+    // Order-preserving, so it scans the shared order — but it's a cheap Int-only pass
+    // (no struct copies / layout-tree walks), unlike the maps above.
     var windowOrder: [Int] { underlying.windowOrder.filter { windowIds.contains($0) } }
-    var activePaneByWindow: [Int: Int] { underlying.activePaneByWindow.filter { windowIds.contains($0.key) } }
-    var paneForegroundStates: [Int: RemoteTmuxPaneForegroundState] { underlying.paneForegroundStates.filter { ownedPaneIds.contains($0.key) } }
+    var activePaneByWindow: [Int: Int] {
+        var result: [Int: Int] = [:]
+        for id in windowIds { if let pane = underlying.activePaneByWindow[id] { result[id] = pane } }
+        return result
+    }
+    var paneForegroundStates: [Int: RemoteTmuxPaneForegroundState] {
+        var result: [Int: RemoteTmuxPaneForegroundState] = [:]
+        for pane in ownedPaneIds { if let state = underlying.paneForegroundStates[pane] { result[pane] = state } }
+        return result
+    }
 
     // MARK: - RemoteTmuxSessionSource: observers
 
@@ -145,9 +163,13 @@ final class RemoteTmuxSessionChannel: RemoteTmuxSessionSource {
     private func ownsPane(_ paneId: Int) -> Bool { ownedPaneIds.contains(paneId) }
 
     /// Rebuilds `ownedPaneIds` from the current window set and shared topology.
+    /// Iterates this session's OWN windows (O(this session's windows)) rather than
+    /// scanning + layout-walking every host window, so a topology fan-out across N
+    /// channels stays O(total windows) instead of O(N × total).
     private func recomputeOwnedPanes() {
         var panes: Set<Int> = []
-        for (windowId, window) in underlying.windowsByID where windowIds.contains(windowId) {
+        for windowId in windowIds {
+            guard let window = underlying.windowsByID[windowId] else { continue }
             for pane in window.paneIDsInOrder { panes.insert(pane) }
         }
         ownedPaneIds = panes
