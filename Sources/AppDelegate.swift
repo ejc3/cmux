@@ -5794,6 +5794,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // normally performs so an open inspector isn't orphaned.
             WebViewInspectorTeardown.closeAllInspectors(in: window)
             window.close()
+            // `window.close()` fires `windowWillClose` → `unregisterMainWindowContext`,
+            // which re-adds this just-closed window to the RECOVERABLE route ledger while
+            // its surfaces are still registered — so it would linger in
+            // `list-windows`/`listMainWindowSummaries` until the async surface-deinit
+            // sweep catches up. A programmatic close is authoritative, so forget the
+            // route now (same fix as `discardMainWindowWithoutClosedHistory`).
+            forgetRecoverableMainWindowRoute(windowId: windowId)
             // Verify against the authoritative registry — it is cleared synchronously
             // on close. `windowForMainWindowId`'s `NSApp.windows` identifier fallback
             // can re-find a just-closed, not-yet-released window and report a FALSE
