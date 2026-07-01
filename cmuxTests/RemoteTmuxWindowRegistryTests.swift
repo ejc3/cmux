@@ -53,4 +53,85 @@ import Testing
         // A subsequent close commit must not kill.
         #expect(registry.consumeKillSessionsOnClose(windowId: windowId) == false)
     }
+
+    // MARK: - Multi-host bindings ("multiple servers in one window")
+
+    private func host(_ destination: String) -> RemoteTmuxHost { RemoteTmuxHost(destination: destination) }
+
+    /// A window can hold several hosts (linked-view aggregation); each host still
+    /// maps to that one window, and `hosts(forWindowId:)` returns them in attach order.
+    @Test func aggregatesMultipleHostsInOneWindow() {
+        let registry = RemoteTmuxWindowRegistry()
+        let windowId = UUID()
+        let a = host("user@a"), b = host("user@b")
+        registry.bind(host: a, windowId: windowId)
+        registry.bind(host: b, windowId: windowId)
+        #expect(registry.windowId(forHostHash: a.connectionHash) == windowId)
+        #expect(registry.windowId(forHostHash: b.connectionHash) == windowId)
+        #expect(registry.hosts(forWindowId: windowId).map(\.connectionHash) == [a.connectionHash, b.connectionHash])
+        #expect(registry.host(forWindowId: windowId)?.connectionHash == a.connectionHash)  // first
+        #expect(registry.isDedicatedWindow(windowId))
+    }
+
+    /// Re-binding the same host to a window is idempotent (no duplicate entry).
+    @Test func rebindingSameHostIsIdempotent() {
+        let registry = RemoteTmuxWindowRegistry()
+        let windowId = UUID()
+        let a = host("user@a")
+        registry.bind(host: a, windowId: windowId)
+        registry.bind(host: a, windowId: windowId)
+        #expect(registry.hosts(forWindowId: windowId).count == 1)
+    }
+
+    /// Unbinding one host leaves the other aggregated hosts (and the window) bound.
+    @Test func unbindHostHashRemovesOnlyThatHost() {
+        let registry = RemoteTmuxWindowRegistry()
+        let windowId = UUID()
+        let a = host("user@a"), b = host("user@b")
+        registry.bind(host: a, windowId: windowId)
+        registry.bind(host: b, windowId: windowId)
+        registry.unbind(hostHash: a.connectionHash)
+        #expect(registry.windowId(forHostHash: a.connectionHash) == nil)
+        #expect(registry.windowId(forHostHash: b.connectionHash) == windowId)
+        #expect(registry.hosts(forWindowId: windowId).map(\.connectionHash) == [b.connectionHash])
+        #expect(registry.isDedicatedWindow(windowId))
+    }
+
+    /// Unbinding the last host drops the window entry entirely.
+    @Test func unbindingLastHostClearsWindow() {
+        let registry = RemoteTmuxWindowRegistry()
+        let windowId = UUID()
+        let a = host("user@a")
+        registry.bind(host: a, windowId: windowId)
+        registry.unbind(hostHash: a.connectionHash)
+        #expect(registry.hosts(forWindowId: windowId).isEmpty)
+        #expect(!registry.isDedicatedWindow(windowId))
+    }
+
+    /// Re-binding a host to a different window moves it (no stale entry left in the
+    /// old window), keeping the two maps consistent.
+    @Test func rebindingHostToAnotherWindowMovesIt() {
+        let registry = RemoteTmuxWindowRegistry()
+        let w1 = UUID(), w2 = UUID()
+        let a = host("user@a")
+        registry.bind(host: a, windowId: w1)
+        registry.bind(host: a, windowId: w2)
+        #expect(registry.windowId(forHostHash: a.connectionHash) == w2)
+        #expect(registry.hosts(forWindowId: w1).isEmpty)
+        #expect(!registry.isDedicatedWindow(w1))
+        #expect(registry.hosts(forWindowId: w2).map(\.connectionHash) == [a.connectionHash])
+    }
+
+    /// Unbinding by window id removes ALL of the window's hosts in both directions.
+    @Test func unbindWindowRemovesAllHosts() {
+        let registry = RemoteTmuxWindowRegistry()
+        let windowId = UUID()
+        let a = host("user@a"), b = host("user@b")
+        registry.bind(host: a, windowId: windowId)
+        registry.bind(host: b, windowId: windowId)
+        registry.unbind(windowId: windowId)
+        #expect(registry.windowId(forHostHash: a.connectionHash) == nil)
+        #expect(registry.windowId(forHostHash: b.connectionHash) == nil)
+        #expect(registry.hosts(forWindowId: windowId).isEmpty)
+    }
 }

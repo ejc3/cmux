@@ -44,6 +44,27 @@ final class RemoteTmuxController {
         return Bool.decodeFromUserDefaults(UserDefaults.standard.object(forKey: key.userDefaultsKey)) ?? key.defaultValue
     }
 
+    /// Synchronous read of the `remoteTmux.linkedView` beta flag (same pattern as
+    /// ``isEnabled``). When on, host attach uses the single shared view connection
+    /// instead of one control connection per session (for MaxSessions=1 hosts).
+    nonisolated static var linkedViewEnabled: Bool {
+        let key = SettingCatalog().betaFeatures.remoteTmuxLinkedView
+        return Bool.decodeFromUserDefaults(UserDefaults.standard.object(forKey: key.userDefaultsKey)) ?? key.defaultValue
+    }
+
+    /// A stable per-install owner id for cmux's hidden view sessions, persisted in
+    /// UserDefaults so the same cmux reattaches its own views across relaunch and
+    /// never collides with another install's.
+    static var linkedViewOwnerId: String {
+        let defaultsKey = "remoteTmux.linkedView.ownerId"
+        if let existing = UserDefaults.standard.string(forKey: defaultsKey), !existing.isEmpty {
+            return existing
+        }
+        let fresh = UUID().uuidString
+        UserDefaults.standard.set(fresh, forKey: defaultsKey)
+        return fresh
+    }
+
     /// Returns (creating if needed) the transport for a host.
     func transport(for host: RemoteTmuxHost) -> RemoteTmuxSSHTransport {
         transportRegistry.transport(for: host)
@@ -271,6 +292,16 @@ final class RemoteTmuxController {
     /// (see ``connectionKey(host:sessionName:)``).
     private var sessionMirrors: [String: RemoteTmuxSessionMirror] = [:]
 
+    /// Linked-view coordinators, one per host (keyed by ``RemoteTmuxHost/connectionHash``),
+    /// used when the `remoteTmux.linkedView` beta is on. Each owns the host's single
+    /// `-CC` view stream; ``syncLinkedWorkspaces(host:manager:)`` projects its
+    /// regrouped workspaces into cmux workspaces + filtered mirrors.
+    private var linkedViews: [String: RemoteTmuxViewConnection] = [:]
+    /// Linked-view mirrors keyed `connectionHash\u{1}session`, sharing the host's
+    /// view connection (distinct from ``sessionMirrors``, which own per-session
+    /// connections).
+    private var linkedMirrors: [String: RemoteTmuxSessionMirror] = [:]
+
     /// Dedicated-window bindings (host↔window) and the in-flight-attach guard for
     /// the "one cmux window per remote endpoint" mirror mode (Option 1), owned by
     /// ``RemoteTmuxController`` and delegated to.
@@ -317,7 +348,8 @@ final class RemoteTmuxController {
     @discardableResult
     func mirrorHostInNewWindow(
         host: RemoteTmuxHost,
-        activateWindow: Bool = true
+        activateWindow: Bool = true,
+        intoWindowId: UUID? = nil
     ) async throws -> RemoteTmuxAttachOutcome {
         guard let appDelegate = AppDelegate.shared else {
             throw RemoteTmuxError.unreachable("app not ready")
@@ -380,13 +412,79 @@ final class RemoteTmuxController {
         // failure (or cancellation) throws here and leaks no orphaned window.
         try await ensureControlMasterReadyForBurst(host: host)
 
-        let windowId = appDelegate.createMainWindow(shouldActivate: activateWindow)
-        guard let manager = appDelegate.tabManagerFor(windowId: windowId) else {
-            throw RemoteTmuxError.unreachable("could not create window")
+        // Aggregate into the requested window when possible ("multiple servers in one
+        // window"), otherwise open a fresh dedicated window. We aggregate into a
+        // window that is either already a linked-view window OR a regular window with
+        // no remote host bound yet (so a user can pull hosts into their main window
+        // alongside local workspaces). We never aggregate into a per-session dedicated
+        // window: per-session mirror mode keeps the single-host invariant. Only
+        // linked-view's one-shared-stream-per-host model keeps a window's hosts
+        // independent, so aggregation requires linked-view to be enabled.
+        let windowId: UUID
+        let manager: TabManager
+        let bootstrapWorkspaceId: UUID?
+        let createdNewWindow: Bool
+        if Self.linkedViewEnabled, let intoWindowId,
+           isLinkedViewWindow(intoWindowId) || !windowRegistry.isDedicatedWindow(intoWindowId),
+           let existingManager = appDelegate.tabManagerFor(windowId: intoWindowId) {
+            windowId = intoWindowId
+            manager = existingManager
+            bootstrapWorkspaceId = nil  // window already holds the first host's workspaces
+            createdNewWindow = false
+            // The user is actively composing this window by aggregating another host
+            // into it, so any local shell already here — e.g. a kept-open shell left by
+            // a host that previously died — is now genuine content the user is keeping,
+            // not disposable scaffolding. Clear the disposable mark so a later
+            // host-death teardown can't discard the window out from under that adopted
+            // shell (data loss); see `teardownLinkedView`'s `hasUserLocalWorkspaces` gate.
+            for tab in existingManager.tabs where tab.isRemoteTmuxDisposableLocalShell {
+                tab.isRemoteTmuxDisposableLocalShell = false
+            }
+            if activateWindow { appDelegate.windowForMainWindowId(intoWindowId)?.makeKeyAndOrderFront(nil) }
+        } else {
+            let newWindowId = appDelegate.createMainWindow(shouldActivate: activateWindow)
+            guard let newManager = appDelegate.tabManagerFor(windowId: newWindowId) else {
+                throw RemoteTmuxError.unreachable("could not create window")
+            }
+            windowId = newWindowId
+            manager = newManager
+            bootstrapWorkspaceId = newManager.tabs.first?.id
+            // The fresh window's only tab is a disposable bootstrap "welcome" — mark it
+            // so teardown can reclaim the window if the host dies before any real mirror
+            // surfaces (it's scaffolding, not the user's work).
+            newManager.tabs.first?.isRemoteTmuxDisposableLocalShell = true
+            createdNewWindow = true
         }
         windowRegistry.bind(host: host, windowId: windowId)
 
-        let bootstrapWorkspaceId = manager.tabs.first?.id
+        // Linked-view mode: one shared `-CC` view stream for the whole host (for
+        // MaxSessions=1 hosts). The coordinator discovers/links sessions and
+        // drives workspace creation asynchronously via `syncLinkedWorkspaces`; the
+        // window populates as its first reconcile lands (the per-session loop and
+        // its synchronous empty-window guard below are skipped).
+        if Self.linkedViewEnabled {
+            do {
+                try await startLinkedView(
+                    host: host, windowId: windowId, manager: manager,
+                    bootstrapWorkspaceId: bootstrapWorkspaceId)
+            } catch {
+                // `startLinkedView` stores the coordinator in `linkedViews` before its
+                // throwing `start()`, so stop it through `stopLinkedView` (which also
+                // unbinds the host, drops the transport, and exits the ControlMaster) —
+                // a bare unbind would leak the half-started coordinator. Discard the
+                // window only if we created it for this host (never an aggregated window
+                // that still holds other hosts).
+                stopLinkedView(host: host)
+                // Discard only a window we created for this host that no OTHER host has
+                // since aggregated into (a concurrent attach can join while we await).
+                if createdNewWindow, windowRegistry.hosts(forWindowId: windowId).isEmpty {
+                    appDelegate.discardMainWindowWithoutClosedHistory(windowId: windowId)
+                }
+                throw error
+            }
+            return .mirrored(windowId: windowId)
+        }
+
         for session in sessions {
             do {
                 try mirrorSession(host: host, sessionName: session.name, into: manager)
@@ -474,6 +572,237 @@ final class RemoteTmuxController {
         return true
     }
 
+    // MARK: - Linked-view orchestration
+
+    /// Parses a tmux `@N` window id string to the Int id the control connection uses.
+    private static func windowIntId(_ id: String) -> Int? {
+        RemoteTmuxControlStreamParser.id(Substring(id), sigil: "@")
+    }
+
+    /// Starts the host's linked-view coordinator and wires it to drive workspace
+    /// creation in `manager`. The coordinator creates/owns the view, attaches the
+    /// single `-CC` client, and republishes its regrouped workspaces; each republish
+    /// reconciles cmux workspaces + filtered mirrors via ``syncLinkedWorkspaces``.
+    private func startLinkedView(
+        host: RemoteTmuxHost,
+        windowId: UUID,
+        manager: TabManager,
+        bootstrapWorkspaceId: UUID?
+    ) async throws {
+        let coordinator = RemoteTmuxViewConnection(
+            host: host, ownerId: Self.linkedViewOwnerId, transport: transport(for: host))
+        coordinator.onWorkspacesChanged = { [weak self] in
+            self?.syncLinkedWorkspaces(
+                host: host, manager: manager, bootstrapWorkspaceId: bootstrapWorkspaceId)
+        }
+        coordinator.onEnded = { [weak self] in
+            self?.teardownLinkedView(host: host, windowId: windowId)
+        }
+        linkedViews[host.connectionHash] = coordinator
+        try await coordinator.start()
+    }
+
+    /// Projects a coordinator's regrouped workspaces into cmux workspaces + filtered
+    /// mirrors that all share the host's single view connection. Creates mirrors for
+    /// new home sessions, re-scopes existing ones (a new tab adds a window id), and
+    /// removes those whose session is gone. Closes the window's bootstrap workspace
+    /// once a real one exists.
+    private func syncLinkedWorkspaces(
+        host: RemoteTmuxHost,
+        manager: TabManager,
+        bootstrapWorkspaceId: UUID?
+    ) {
+        guard let coordinator = linkedViews[host.connectionHash],
+              let connection = coordinator.connection else { return }
+        let desired = coordinator.workspaces
+        // No real sessions remain (e.g. the last was killed out-of-band): tear down
+        // the view + dedicated window. `TabManager.closeWorkspace` refuses to remove
+        // a window's final workspace, so the per-mirror removal below cannot clear an
+        // empty window — this matches the non-linked last-session-ends behavior.
+        if desired.isEmpty {
+            if let windowId = windowRegistry.windowId(forHostHash: host.connectionHash) {
+                teardownLinkedView(host: host, windowId: windowId)
+            }
+            return
+        }
+        let desiredNames = Set(desired.map(\.sessionName))
+
+        // Remove mirrors whose session no longer exists.
+        for (key, mirror) in linkedMirrors
+        where mirror.host.connectionHash == host.connectionHash
+            && !desiredNames.contains(mirror.sessionName) {
+            mirror.detachObserver()
+            if let workspaceId = mirror.mirroredWorkspaceId,
+               let workspace = manager.tabs.first(where: { $0.id == workspaceId }) {
+                manager.closeWorkspace(workspace, recordHistory: false)
+            }
+            linkedMirrors[key] = nil
+        }
+
+        // Create or re-scope a mirror for each desired workspace.
+        for workspaceGroup in desired {
+            let key = Self.connectionKey(host: host, sessionName: workspaceGroup.sessionName)
+            let windowIds = Set(workspaceGroup.windowIds.compactMap { Self.windowIntId($0) })
+            let activeWindowId = workspaceGroup.activeWindowId.flatMap { Self.windowIntId($0) }
+            if let existing = linkedMirrors[key] {
+                existing.updateWindowIdFilter(windowIds, activeWindowId: activeWindowId)
+            } else {
+                let workspace = manager.addWorkspace(
+                    title: workspaceGroup.sessionName, select: false, autoWelcomeIfNeeded: false)
+                workspace.isRemoteTmuxMirror = true
+                linkedMirrors[key] = RemoteTmuxSessionMirror(
+                    host: host,
+                    sessionName: workspaceGroup.sessionName,
+                    connection: connection,
+                    tabManager: manager,
+                    workspace: workspace,
+                    windowIdFilter: windowIds,
+                    activeWindowId: activeWindowId,
+                    managesOwnLifecycle: false,
+                    perWindowSizing: true)
+            }
+        }
+
+        // Drop the bootstrap (local welcome) workspace once a real mirror exists.
+        if linkedMirrors.values.contains(where: { $0.host.connectionHash == host.connectionHash }),
+           let bootstrapWorkspaceId,
+           manager.tabs.count > 1,
+           let bootstrap = manager.tabs.first(where: { $0.id == bootstrapWorkspaceId }),
+           !bootstrap.isRemoteTmuxMirror {
+            manager.closeWorkspace(bootstrap, recordHistory: false)
+        }
+    }
+
+    /// Stops a host's linked-view coordinator (its shared `-CC` stream) and removes
+    /// the host's mirrors, WITHOUT touching the dedicated window — callers running
+    /// during window close must not re-discard it. Also drops the host's transport
+    /// and exits the shared ControlMaster, matching the non-linked close path.
+    /// Returns `true` if a coordinator was present.
+    @discardableResult
+    private func stopLinkedView(host: RemoteTmuxHost) -> Bool {
+        guard linkedViews[host.connectionHash] != nil else { return false }
+        for (key, mirror) in linkedMirrors
+        where mirror.host.connectionHash == host.connectionHash {
+            mirror.detachObserver()
+            linkedMirrors[key] = nil
+        }
+        linkedViews[host.connectionHash]?.stop()
+        linkedViews[host.connectionHash] = nil
+        windowRegistry.unbind(hostHash: host.connectionHash)
+        // Drop the shared transport/ControlMaster only if no per-session mirror still
+        // needs it (a host can hold both modes if the beta flag is toggled mid-session).
+        if !hostStillInUse(host) {
+            transportRegistry.remove(connectionHash: host.connectionHash)
+            RemoteTmuxSSHTransport.spawnControlMasterExit(host: host)
+        }
+        return true
+    }
+
+    /// Whether `host`'s shared transport/ControlMaster is still needed by ANY live
+    /// mirror in either mode — guards transport teardown so tearing one mode down
+    /// doesn't pull the master out from under the other (possible when the beta flag
+    /// is toggled mid-session so a host has both a linked view and per-session mirrors).
+    private func hostStillInUse(_ host: RemoteTmuxHost) -> Bool {
+        linkedViews[host.connectionHash] != nil
+            || sessionMirrors.values.contains { $0.host.connectionHash == host.connectionHash }
+            || connectionsByHostSession.values.contains { $0.host.connectionHash == host.connectionHash }
+    }
+
+    /// Tears down a host's linked-view coordinator and all its mirrors (the view
+    /// stream ended for good). Closes the host's workspaces and, when no other
+    /// aggregated host remains in the window, discards the window.
+    private func teardownLinkedView(host: RemoteTmuxHost, windowId: UUID) {
+        let manager = AppDelegate.shared?.tabManagerFor(windowId: windowId)
+        // Capture this host's workspace ids before stopLinkedView drops the mirrors,
+        // then stop FIRST so closing the workspaces below can't re-enter the kill path
+        // (handleWorkspaceClosed finds no mirror and no-ops).
+        let workspaceIds = linkedMirrors.values
+            .filter { $0.host.connectionHash == host.connectionHash }
+            .compactMap(\.mirroredWorkspaceId)
+        stopLinkedView(host: host)
+        // Close this host's workspaces (when the window holds others, e.g. a second
+        // server) so an ended host's tabs don't linger; the window's FINAL workspace
+        // can't be closed, so a single-host window is discarded below instead.
+        if let manager {
+            for workspaceId in workspaceIds {
+                guard manager.tabs.count > 1,
+                      let workspace = manager.tabs.first(where: { $0.id == workspaceId }),
+                      // A mirror that was converted to a kept-open LOCAL shell (its host
+                      // died and the user kept the terminal) is no longer ours to close
+                      // — `isRemoteTmuxMirror` flips false on conversion. Closing it here
+                      // would discard the user's adopted local work.
+                      workspace.isRemoteTmuxMirror else { continue }
+                manager.closeWorkspace(workspace, recordHistory: false)
+            }
+        }
+        // Discard a window that has nothing of the USER's left in it (a dead dedicated
+        // remote window whose last tab can't be closed). A "genuine" local tab is a
+        // non-mirror workspace that is NOT remote-tmux scaffolding — i.e. not the
+        // disposable bootstrap welcome and not a kept-open-local shell from a dead
+        // mirror (those defeat a plain `!isRemoteTmuxMirror` check and strand the
+        // window — the window-leak fix). This is fail-closed: a window the user moved a
+        // real local tab into keeps that tab (genuine → not discarded), and an
+        // AGGREGATED window with the user's local tabs is never discarded.
+        let hasUserLocalWorkspaces = manager?.tabs.contains {
+            !$0.isRemoteTmuxMirror && !$0.isRemoteTmuxDisposableLocalShell
+        } ?? false
+        if !hasUserLocalWorkspaces,
+           windowRegistry.hosts(forWindowId: windowId).isEmpty,
+           let appDelegate = AppDelegate.shared,
+           appDelegate.windowForMainWindowId(windowId) != nil {
+            appDelegate.discardMainWindowWithoutClosedHistory(windowId: windowId)
+        }
+    }
+
+    /// Whether `windowId` is a live linked-view window (at least one of its hosts has
+    /// a running coordinator) — the only kind that can aggregate another server.
+    private func isLinkedViewWindow(_ windowId: UUID) -> Bool {
+        windowRegistry.hosts(forWindowId: windowId).contains { linkedViews[$0.connectionHash] != nil }
+    }
+
+    /// The linked-view coordinator a New Workspace / New Tab in `windowId` should
+    /// ride. A window can aggregate several servers, so route to the SELECTED
+    /// workspace's host (its mirror); fall back to the window's first host when no
+    /// remote mirror is selected yet.
+    private func linkedViewCoordinator(forWindowId windowId: UUID) -> RemoteTmuxViewConnection? {
+        if let manager = AppDelegate.shared?.tabManagerFor(windowId: windowId),
+           let selected = manager.selectedTab,
+           let mirror = linkedMirrors.values.first(where: { $0.mirroredWorkspaceId == selected.id }) {
+            return linkedViews[mirror.host.connectionHash]
+        }
+        guard let host = windowRegistry.host(forWindowId: windowId) else { return nil }
+        return linkedViews[host.connectionHash]
+    }
+
+    // MARK: - Action mirror lookup (both modes)
+
+    /// A workspace's mirror, whether per-session (non-linked) or shared (linked-view).
+    /// Action handlers use this so they work in both modes: a linked mirror shares one
+    /// view `-CC` connection but addresses windows/panes by tmux's GLOBAL ids, so
+    /// commands targeting `@windowId`/`%paneId` route correctly over it.
+    private func actionMirror(forWorkspaceId workspaceId: UUID) -> RemoteTmuxSessionMirror? {
+        sessionMirrors.values.first { $0.mirroredWorkspaceId == workspaceId }
+            ?? linkedMirrors.values.first { $0.mirroredWorkspaceId == workspaceId }
+    }
+
+    /// The remote host a mirrored workspace is mirroring, in either mode. Used by
+    /// the sidebar to color a per-origin rail by host; `nil` for a workspace that
+    /// is not a remote tmux mirror.
+    func remoteTmuxHost(forWorkspaceId workspaceId: UUID) -> RemoteTmuxHost? {
+        actionMirror(forWorkspaceId: workspaceId)?.host
+    }
+
+    /// All action mirrors across both modes, for surface-based lookups.
+    private var actionMirrors: [RemoteTmuxSessionMirror] {
+        Array(sessionMirrors.values) + Array(linkedMirrors.values)
+    }
+
+    /// Whether `mirror` is a shared linked-view mirror (its connection is the view
+    /// stream, not a per-session one) — used to anchor session-relative commands.
+    private func isLinkedMirror(_ mirror: RemoteTmuxSessionMirror) -> Bool {
+        linkedMirrors.values.contains { $0 === mirror }
+    }
+
     // MARK: - Create / destroy propagation (P5)
 
     /// A new tab was requested in a mirrored workspace → create a tmux window in
@@ -504,8 +833,26 @@ final class RemoteTmuxController {
         workingDirectory: String?,
         workingDirectorySourcePanelId: UUID?
     ) -> Bool {
-        guard let mirror = sessionMirrors.values.first(where: { $0.mirroredWorkspaceId == workspaceId }),
+        guard let mirror = actionMirror(forWorkspaceId: workspaceId),
               mirror.connection.connectionState == .connected else { return false }
+        let commandWorkingDirectory = Self.liveMirrorWindowWorkingDirectory(
+            workingDirectory,
+            sourcePanelId: workingDirectorySourcePanelId,
+            windowIdForPanel: mirror.windowId(forPanel:)
+        )
+        // Linked-view: anchor on the home session by name — a window id is ambiguous
+        // when linked into both the home session and the hidden view, so it would
+        // create the tab in the view over the shared connection.
+        if isLinkedMirror(mirror) {
+            let sent = mirror.connection.send(
+                Self.newWindowCommandInSession(mirror.sessionName, workingDirectory: commandWorkingDirectory)
+            )
+            // The new window is in the home session, not yet linked into the view, so
+            // the view stream gets no %window-add — nudge a reconcile to link it and
+            // surface it as a tab.
+            if sent { linkedViews[mirror.host.connectionHash]?.requestReconcile() }
+            return sent
+        }
         let afterWindowId: Int?
         switch placement {
         case .end:
@@ -514,11 +861,6 @@ final class RemoteTmuxController {
             // nil (panel has no live window) falls back to end placement.
             afterWindowId = mirror.windowId(forPanel: panelId)
         }
-        let commandWorkingDirectory = Self.liveMirrorWindowWorkingDirectory(
-            workingDirectory,
-            sourcePanelId: workingDirectorySourcePanelId,
-            windowIdForPanel: mirror.windowId(forPanel:)
-        )
         return mirror.connection.send(
             Self.newWindowCommand(afterWindowId: afterWindowId, workingDirectory: commandWorkingDirectory)
         )
@@ -562,29 +904,57 @@ final class RemoteTmuxController {
     /// terminate the command line is dropped, leaving the placement-only command.
     nonisolated static func newWindowCommand(afterWindowId: Int?, workingDirectory: String?) -> String {
         var command = afterWindowId.map { "new-window -a -t @\($0)" } ?? "new-window -a -t '{end}'"
+        appendWorkingDirectory(&command, workingDirectory)
+        return command
+    }
+
+    /// `new-window` for a linked-view mirror, anchored on the home session BY NAME.
+    /// A bare window id (`@id`) is ambiguous when the window is linked into both the
+    /// home session and the hidden view, so over the shared view connection
+    /// `new-window -t @id` creates the window in the VIEW. `'<session>:{end}'` forces
+    /// it into the home session, at the end. (Exact after-panel placement is not
+    /// preserved for linked tabs; correct session beats exact position.)
+    nonisolated static func newWindowCommandInSession(_ sessionName: String, workingDirectory: String?) -> String {
+        var command = "new-window -a -t \(RemoteTmuxHost.shellSingleQuoted("\(sessionName):{end}"))"
+        appendWorkingDirectory(&command, workingDirectory)
+        return command
+    }
+
+    private nonisolated static func appendWorkingDirectory(_ command: inout String, _ workingDirectory: String?) {
         if let directory = workingDirectory?.trimmingCharacters(in: .whitespacesAndNewlines),
            !directory.isEmpty,
            RemoteTmuxHost.controlModeLineSafeName(directory) != nil {
             command += " -c \(RemoteTmuxHost.shellSingleQuoted(directory))"
         }
-        return command
     }
 
     /// A mirrored workspace was renamed → `rename-session` on the remote so the
     /// tmux session name tracks the cmux workspace title.
     func handleMirrorWorkspaceRenamed(workspaceId: UUID, title: String?) {
         guard let name = RemoteTmuxHost.controlModeCommandName(title),
-              let entry = sessionMirrors.first(where: { $0.value.mirroredWorkspaceId == workspaceId })
+              let mirror = actionMirror(forWorkspaceId: workspaceId)
         else { return }
-        let mirror = entry.value
         let oldName = mirror.sessionName
         guard name != oldName, mirror.connection.connectionState == .connected else { return }
-        // Target by the stable session id when known, so the rename can't race a
-        // prior rename's name.
-        guard let target = mirror.connection.sessionId.map({ "$\($0)" })
-            ?? RemoteTmuxHost.controlModeLineSafeName(oldName).map(RemoteTmuxHost.shellSingleQuoted)
-        else { return }
-        _ = mirror.connection.send("rename-session -t \(target) \(RemoteTmuxHost.shellSingleQuoted(name))")
+        // Non-linked: target by the stable session id when known, so the rename can't
+        // race a prior rename's name. Linked: the shared connection's session id is
+        // the VIEW session's, so target the home session by name instead. (The
+        // rename surfaces back through reconcile, which re-keys the linked mirror.)
+        let target: String?
+        if isLinkedMirror(mirror) {
+            target = RemoteTmuxHost.controlModeLineSafeName(oldName).map(RemoteTmuxHost.shellSingleQuoted)
+        } else {
+            target = mirror.connection.sessionId.map({ "$\($0)" })
+                ?? RemoteTmuxHost.controlModeLineSafeName(oldName).map(RemoteTmuxHost.shellSingleQuoted)
+        }
+        guard let target else { return }
+        let sent = mirror.connection.send("rename-session -t \(target) \(RemoteTmuxHost.shellSingleQuoted(name))")
+        // Linked mirrors suppress %session-changed (the coordinator owns the view
+        // connection's identity), so nudge a reconcile to re-key this host's mirror to
+        // the new session name — otherwise later new-tab/close target the old name.
+        if sent, isLinkedMirror(mirror) {
+            linkedViews[mirror.host.connectionHash]?.requestReconcile()
+        }
         // Do not re-key local state here. tmux can reject a rename (for example
         // duplicate session name); `%session-changed` is the confirmation point.
     }
@@ -634,7 +1004,7 @@ final class RemoteTmuxController {
     /// `swap-window` only swaps two windows' indices (no unlink), so there is no
     /// churn. `-d` keeps the active window unchanged.
     func handleMirrorWindowsReordered(workspaceId: UUID, orderedPanelIds: [UUID]) {
-        guard let mirror = sessionMirrors.values.first(where: { $0.mirroredWorkspaceId == workspaceId }),
+        guard let mirror = actionMirror(forWorkspaceId: workspaceId),
               mirror.connection.connectionState == .connected else { return }
         let desired = orderedPanelIds.compactMap { mirror.windowId(forPanel: $0) }
         guard desired.count >= 2 else { return }
@@ -668,7 +1038,7 @@ final class RemoteTmuxController {
     /// `%layout-change`. Returns `true` if `surfaceId` is a mirror pane (the
     /// caller suppresses the local split).
     func handleMirrorSplitRequested(surfaceId: UUID, vertical: Bool) -> Bool {
-        for sessionMirror in sessionMirrors.values {
+        for sessionMirror in actionMirrors {
             if let match = sessionMirror.windowMirror(forSurfaceId: surfaceId) {
                 return match.mirror.requestSplit(fromPane: match.tmuxPaneId, vertical: vertical)
             }
@@ -679,7 +1049,7 @@ final class RemoteTmuxController {
     /// Whether `surfaceId` is a pane of a mirrored multi-pane tmux window (used
     /// to keep the context-menu Split items enabled for mirror panes).
     func isMirrorPaneSurface(_ surfaceId: UUID) -> Bool {
-        for sessionMirror in sessionMirrors.values {
+        for sessionMirror in actionMirrors {
             if sessionMirror.windowMirror(forSurfaceId: surfaceId) != nil { return true }
         }
         return false
@@ -703,7 +1073,7 @@ final class RemoteTmuxController {
     private func pasteTarget(forSurfaceId surfaceId: UUID)
         -> (connection: RemoteTmuxControlConnection, paneId: Int)?
     {
-        for sessionMirror in sessionMirrors.values where sessionMirror.connection.connectionState == .connected {
+        for sessionMirror in actionMirrors where sessionMirror.connection.connectionState == .connected {
             if let paneId = sessionMirror.paneId(forSurfaceId: surfaceId) {
                 return (sessionMirror.connection, paneId)
             }
@@ -716,7 +1086,7 @@ final class RemoteTmuxController {
     /// to the remote tmux host (and insert the remote path) instead of an
     /// unreadable macOS-local one.
     func remoteUploadTarget(forSurfaceId surfaceId: UUID) -> TerminalRemoteUploadTarget? {
-        for sessionMirror in sessionMirrors.values
+        for sessionMirror in actionMirrors
         where !sessionMirror.connection.exited && sessionMirror.ownsSurface(surfaceId) {
             return .detectedSSH(sessionMirror.host.detectedSSHSession())
         }
@@ -727,7 +1097,7 @@ final class RemoteTmuxController {
     /// bonsplit-level split) → propagate to tmux `split-window`. Covers both
     /// single-pane mirror windows and multi-pane ones. Returns `true` if handled.
     func handleMirrorTabSplitRequested(workspaceId: UUID, panelId: UUID, vertical: Bool) -> Bool {
-        guard let mirror = sessionMirrors.values.first(where: { $0.mirroredWorkspaceId == workspaceId })
+        guard let mirror = actionMirror(forWorkspaceId: workspaceId)
         else { return false }
         return mirror.requestSplit(windowPanelId: panelId, vertical: vertical)
     }
@@ -735,7 +1105,7 @@ final class RemoteTmuxController {
     /// A mirrored window's tab was renamed → `rename-window` on the remote.
     func handleMirrorWindowRenamed(workspaceId: UUID, panelId: UUID, title: String?) {
         guard let name = RemoteTmuxHost.controlModeCommandName(title),
-              let mirror = sessionMirrors.values.first(where: { $0.mirroredWorkspaceId == workspaceId }),
+              let mirror = actionMirror(forWorkspaceId: workspaceId),
               mirror.connection.connectionState == .connected,
               let windowId = mirror.windowId(forPanel: panelId) else { return }
         _ = mirror.connection.send("rename-window -t @\(windowId) \(RemoteTmuxHost.shellSingleQuoted(name))")
@@ -748,7 +1118,7 @@ final class RemoteTmuxController {
     private func mirrorWindowTarget(workspaceId: UUID, panelId: UUID)
         -> (mirror: RemoteTmuxSessionMirror, windowId: Int)?
     {
-        guard let mirror = sessionMirrors.values.first(where: { $0.mirroredWorkspaceId == workspaceId }),
+        guard let mirror = actionMirror(forWorkspaceId: workspaceId),
               let windowId = mirror.windowId(forPanel: panelId) else { return nil }
         return (mirror, windowId)
     }
@@ -859,6 +1229,18 @@ final class RemoteTmuxController {
     ///   mirror (caller suppresses local creation); `false` otherwise — e.g. a dedicated
     ///   window whose active tab is a dragged-in local one, so the caller goes local.
     func handleRemoteWindowNewWorkspaceRequested(windowId: UUID) -> Bool {
+        // Linked-view: a new workspace is a new tmux session created over the shared
+        // view stream (no new SSH session); it links in and surfaces via the
+        // coordinator's republish. "New workspace rides the linking." Gate on LIVE
+        // coordinator state (not the beta flag, so toggling it off mid-session still
+        // routes correctly) AND on the ACTIVE workspace being a remote mirror — a
+        // dragged-in local workspace that's active must create a local workspace. The
+        // coordinator is the SELECTED workspace's host, so it rides the right server.
+        if let coordinator = linkedViewCoordinator(forWindowId: windowId),
+           AppDelegate.shared?.tabManagerFor(windowId: windowId)?.selectedTab?.isRemoteTmuxMirror == true {
+            coordinator.newWorkspace()
+            return true
+        }
         // The registry stores the full host (destination + port + identity), so
         // the new session reuses the exact connection details of the window's host.
         guard let host = windowRegistry.host(forWindowId: windowId) else { return false }
@@ -1062,23 +1444,35 @@ final class RemoteTmuxController {
     func killMarkedSessionsBeforeTerminate(timeout: Duration = .seconds(3)) async {
         var jobs: [(transport: RemoteTmuxSSHTransport, target: String)] = []
         for windowId in windowRegistry.windowsMarkedForKillOnClose() {
-            guard windowRegistry.consumeKillSessionsOnClose(windowId: windowId),
-                  let host = windowRegistry.host(forWindowId: windowId) else { continue }
+            guard windowRegistry.consumeKillSessionsOnClose(windowId: windowId) else { continue }
             let closingWorkspaceIds = Set(AppDelegate.shared?.tabManagerFor(windowId: windowId)?.tabs.map(\.id) ?? [])
-            let transport = transport(for: host)
-            let mirrorsInWindow = sessionMirrors.filter { _, mirror in
-                mirror.host.connectionHash == host.connectionHash
-                    && mirror.mirroredWorkspaceId.map(closingWorkspaceIds.contains) == true
+            // A window can aggregate several hosts (linked-view multi-server); kill
+            // each host's sessions.
+            for host in windowRegistry.hosts(forWindowId: windowId) {
+                // Linked-view: the host's real sessions are reachable only over the
+                // live view stream (a one-shot ssh would be refused under
+                // MaxSessions=1). Kill them there with a round-trip barrier so the
+                // kills land before we stop the shared coordinator.
+                if let coordinator = linkedViews[host.connectionHash] {
+                    await coordinator.killAllWorkspaceSessions()
+                    stopLinkedView(host: host)
+                    continue
+                }
+                let transport = transport(for: host)
+                let mirrorsInWindow = sessionMirrors.filter { _, mirror in
+                    mirror.host.connectionHash == host.connectionHash
+                        && mirror.mirroredWorkspaceId.map(closingWorkspaceIds.contains) == true
+                }
+                for (key, mirror) in mirrorsInWindow {
+                    sessionMirrors.removeValue(forKey: key)
+                    mirror.detachObserver()
+                    detach(host: host, sessionName: mirror.sessionName)  // removes the connection too
+                    jobs.append((transport, mirror.connection.sessionId.map { "$\($0)" } ?? mirror.sessionName))
+                }
+                let hostHasOtherMirrors = sessionMirrors.values.contains { $0.host.connectionHash == host.connectionHash }
+                if !hostHasOtherMirrors { windowRegistry.unbind(hostHash: host.connectionHash) }
+                if !hostHasOtherMirrors, !connectionsByHostSession.values.contains(where: { $0.host.connectionHash == host.connectionHash }) { transportRegistry.remove(connectionHash: host.connectionHash) }
             }
-            for (key, mirror) in mirrorsInWindow {
-                sessionMirrors.removeValue(forKey: key)
-                mirror.detachObserver()
-                detach(host: host, sessionName: mirror.sessionName)  // removes the connection too
-                jobs.append((transport, mirror.connection.sessionId.map { "$\($0)" } ?? mirror.sessionName))
-            }
-            let hostHasOtherMirrors = sessionMirrors.values.contains { $0.host.connectionHash == host.connectionHash }
-            if !hostHasOtherMirrors { windowRegistry.unbind(hostHash: host.connectionHash) }
-            if !hostHasOtherMirrors, !connectionsByHostSession.values.contains(where: { $0.host.connectionHash == host.connectionHash }) { transportRegistry.remove(connectionHash: host.connectionHash) }
         }
         await RemoteTmuxSSHTransport.killSessions(jobs, timeout: timeout)
     }
@@ -1086,6 +1480,17 @@ final class RemoteTmuxController {
     /// Dedicated window close detaches only that window's mirrors; same-host mirrors
     /// in other windows keep their control streams.
     func handleRemoteWindowClosed(windowId: UUID) {
+        // Linked-view: shared `-CC` coordinators back the window — stop EVERY
+        // aggregated host's coordinator (a window can hold several servers) instead
+        // of walking per-session mirrors. The window is already closing, so
+        // `stopLinkedView` must not re-discard it. Gated on live coordinator state —
+        // NOT the beta flag — so a window opened while the flag was on still tears
+        // down if the user toggles it off.
+        var stoppedLinked = false
+        for host in windowRegistry.hosts(forWindowId: windowId) where stopLinkedView(host: host) {
+            stoppedLinked = true
+        }
+        if stoppedLinked { return }
         guard let host = windowRegistry.host(forWindowId: windowId) else { return }
         let closingWorkspaceIds = Set(AppDelegate.shared?.tabManagerFor(windowId: windowId)?.tabs.map(\.id) ?? [])
         windowRegistry.unbind(windowId: windowId)
@@ -1098,8 +1503,7 @@ final class RemoteTmuxController {
             sessionMirrors.removeValue(forKey: key)
             removeCachedConnection(forKey: key)?.stop()
         }
-        let stillUsed = sessionMirrors.values.contains { $0.host.connectionHash == host.connectionHash } || connectionsByHostSession.values.contains { $0.host.connectionHash == host.connectionHash }
-        if !stillUsed {
+        if !hostStillInUse(host) {
             transportRegistry.remove(connectionHash: host.connectionHash)
             RemoteTmuxSSHTransport.spawnControlMasterExit(host: host)
         }
@@ -1118,6 +1522,15 @@ final class RemoteTmuxController {
 
     /// User-initiated mirrored workspace close detaches locally and kills the remote session.
     func handleWorkspaceClosed(workspaceId: UUID) {
+        // Linked-view: kill the real session over the shared view stream. The
+        // coordinator's reconcile then drops the mirror + workspace (and tears down
+        // the window when it was the last). Without this the workspace closes only
+        // locally and the next reconcile re-adds it, since the session still exists.
+        if let entry = linkedMirrors.first(where: { $0.value.mirroredWorkspaceId == workspaceId }) {
+            linkedViews[entry.value.host.connectionHash]?
+                .killWorkspaceSession(named: entry.value.sessionName)
+            return
+        }
         guard let entry = sessionMirrors.first(where: { $0.value.mirroredWorkspaceId == workspaceId })
         else { return }
         let mirror = entry.value
@@ -1179,6 +1592,12 @@ final class RemoteTmuxController {
     /// CLI's `ssh -f` left them persistent). Does NOT kill any remote tmux
     /// server/session — only the local control clients and masters.
     func detachAll() {
+        // Stop linked-view coordinators (each owns a shared view connection) and
+        // drop their mirrors; the remote tmux servers keep running for resume.
+        for (_, mirror) in linkedMirrors { mirror.detachObserver() }
+        linkedMirrors.removeAll()
+        for (_, coordinator) in linkedViews { coordinator.stop() }
+        linkedViews.removeAll()
         let connections = Array(connectionsByHostSession.keys).compactMap { removeCachedConnection(forKey: $0) }
         for connection in connections { connection.stop() }
         // Fire-and-forget `ssh -O exit` per endpoint: it hits the local control

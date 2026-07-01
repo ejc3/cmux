@@ -43,6 +43,23 @@ extension TabManager {
     }
 
     private func windowTitle(for tab: Workspace?) -> String {
+        withRemoteHostPrefix(baseWindowTitle(for: tab), tab: tab)
+    }
+
+    /// Prefixes a display title with the remote tmux host name when `tab` is a
+    /// mirror, so windows/chrome that hold (or aggregate) remote sessions are
+    /// identifiable: "host — workspace". Used by the NSWindow title (Window menu /
+    /// Mission Control) and cmux's own title bar + command label.
+    func withRemoteHostPrefix(_ title: String, tab: Workspace?) -> String {
+        guard let tab, tab.isRemoteTmuxMirror,
+              let host = AppDelegate.shared?.remoteTmuxController.remoteTmuxHost(forWorkspaceId: tab.id)
+        else { return title }
+        let destination = host.destination.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !destination.isEmpty else { return title }
+        return title.isEmpty ? destination : "\(destination) \u{2014} \(title)"
+    }
+
+    private func baseWindowTitle(for tab: Workspace?) -> String {
         let defaultTitle = defaultWindowTitle(for: tab)
         guard let windowId, let template = WindowTitleTemplate.configured() else { return defaultTitle }
 

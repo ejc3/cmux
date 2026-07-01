@@ -78,6 +78,10 @@ final class RemoteTmuxControlConnection {
     /// the cached classification instead of hanging until a reconnect that may
     /// never come.
     private var activityQueryCompletions: [UUID: ([Int: PaneForegroundState]?) -> Void] = [:]
+    /// In-flight generic ``query(_:)`` completions, keyed by token. Resolved with
+    /// the reply body lines, or `nil` if the command errored or the stream became
+    /// unusable — so an awaiting caller never hangs.
+    private var queryCompletions: [UUID: ([String]?) -> Void] = [:]
 
     private var process: Process?
     private var stdinWriter: RemoteTmuxControlPipeWriter?
@@ -127,6 +131,16 @@ final class RemoteTmuxControlConnection {
     /// reverting to ssh's default 80×24.
     private var lastClientSize: (columns: Int, rows: Int)?
     private var pendingPostAttachAction: PostAttachAction?
+
+    /// Per-window desired sizes for the linked-view path, where ONE control client
+    /// is shared by every mirrored window so a single `refresh-client -C` can't size
+    /// them independently. Each window is sized explicitly via `resize-window -t @id`
+    /// (the view session runs `window-size manual`). `pending` is the latest request
+    /// per window; `applied` is what we last sent, so the debounced flush skips
+    /// no-ops; both are re-applied after a reconnect.
+    private var pendingWindowSizes: [Int: (columns: Int, rows: Int)] = [:]
+    private var appliedWindowSizes: [Int: (columns: Int, rows: Int)] = [:]
+    private var windowResizeDebounceTask: Task<Void, Never>?
 
     /// Trailing-edge debounce for `refresh-client -C`. SwiftUI layout settle makes the
     /// rendered grid oscillate (e.g. cols 154→155→156→161→…, ~15 distinct grids in
@@ -324,6 +338,7 @@ final class RemoteTmuxControlConnection {
         // Normally already flushed by beginReconnecting; kept here so a future
         // caller of spawnProcess can't strand a close decision.
         failPendingActivityQueries()
+        failPendingQueries()
         attachBlockDrained = false
         stderrBuffer = ""
         enterReceived = false
@@ -426,6 +441,40 @@ final class RemoteTmuxControlConnection {
     @discardableResult
     func send(_ command: String) -> Bool {
         sendInternal(command, kind: .other)
+    }
+
+    /// Sizes ONE mirrored window to `columns`×`rows` cells via `resize-window -t @id`
+    /// — the linked-view analogue of ``setClientSize(columns:rows:)``. The shared
+    /// view client can't size each window via `refresh-client -C`, so windows are
+    /// resized explicitly (the view session runs `window-size manual`). Records the
+    /// size for reconnect reseed; debounced so SwiftUI's layout-settle oscillation
+    /// coalesces into one `resize-window` per window.
+    func resizeWindow(windowId: Int, columns: Int, rows: Int) {
+        guard columns > 0, rows > 0 else { return }
+        pendingWindowSizes[windowId] = (columns, rows)
+        guard connectionState == .connected else { return }
+        windowResizeDebounceTask?.cancel()
+        windowResizeDebounceTask = Task { @MainActor [weak self] in
+            do {
+                try await ContinuousClock().sleep(for: .milliseconds(Self.clientSizeDebounceMs))
+            } catch {
+                return
+            }
+            guard let self, self.connectionState == .connected else { return }
+            self.flushWindowResizes()
+        }
+    }
+
+    /// Sends `resize-window` for every window whose desired size differs from what we
+    /// last applied (skipping no-ops). Used by the debounce and by reconnect reseed.
+    private func flushWindowResizes() {
+        for (windowId, size) in pendingWindowSizes
+        where appliedWindowSizes[windowId]?.columns != size.columns
+            || appliedWindowSizes[windowId]?.rows != size.rows {
+            if send("resize-window -t @\(windowId) -x \(size.columns) -y \(size.rows)") {
+                appliedWindowSizes[windowId] = size
+            }
+        }
     }
 
     /// Sizes the tmux control client to `columns`×`rows` cells (tmux
@@ -777,6 +826,37 @@ final class RemoteTmuxControlConnection {
         sendActivityQuery(Self.paneActivityQueryCommand(paneId: paneId), completion: completion)
     }
 
+    /// Runs `command` over the live control stream and returns its `%begin`/`%end`
+    /// reply body (one string per line), or `nil` if the command errored or the
+    /// stream became unusable. This is how the linked-view coordinator snapshots
+    /// the server (`list-sessions`, `list-windows -a`) without a second concurrent
+    /// ssh — required on MaxSessions=1 hosts where the `-CC` client holds the one
+    /// allowed session. Replies correlate positionally via the pending-command
+    /// FIFO, exactly like the other typed commands.
+    func query(_ command: String) async -> [String]? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<[String]?, Never>) in
+            guard connectionState == .connected else {
+                continuation.resume(returning: nil)
+                return
+            }
+            let token = UUID()
+            queryCompletions[token] = { continuation.resume(returning: $0) }
+            guard sendInternal(command, kind: .query(token)) else {
+                queryCompletions.removeValue(forKey: token)?(nil)
+                return
+            }
+        }
+    }
+
+    /// Fails every in-flight ``query(_:)`` with `nil` — called whenever the control
+    /// stream becomes unusable, so awaiting coordinators don't hang.
+    private func failPendingQueries() {
+        guard !queryCompletions.isEmpty else { return }
+        let completions = Array(queryCompletions.values)
+        queryCompletions.removeAll()
+        for completion in completions { completion(nil) }
+    }
+
     private func sendActivityQuery(
         _ command: String, completion: @escaping ([Int: PaneForegroundState]?) -> Void
     ) {
@@ -898,6 +978,7 @@ final class RemoteTmuxControlConnection {
     /// (``stop()``) and a genuine remote end (`%exit`).
     private func cancelScheduledWork() {
         failPendingActivityQueries()
+        failPendingQueries()
         reconnectTask?.cancel()
         reconnectTask = nil
         clientSizeDebounceTask?.cancel()
@@ -1021,6 +1102,7 @@ final class RemoteTmuxControlConnection {
         // The stream is dead: a close decision awaiting an activity query must
         // not hang for the whole backoff window — fail it onto the cache now.
         failPendingActivityQueries()
+        failPendingQueries()
         teardownProcessHandles()
         reconnectAttemptCount = 0
         connectionState = .reconnecting
@@ -1076,6 +1158,10 @@ final class RemoteTmuxControlConnection {
         if let size = lastClientSize {
             send("refresh-client -C \(size.columns)x\(size.rows)")
         }
+        // Linked-view per-window sizes: a fresh client reverts windows to default, so
+        // re-apply every recorded `resize-window` (clear applied → all resend).
+        appliedWindowSizes.removeAll()
+        flushWindowResizes()
         // The re-applied size is usually a no-op (the server kept the window at our
         // size across the transport drop), so TUIs get no SIGWINCH — kick them so
         // they repaint over the re-seeded (possibly stale) frame. FIFO-safe: the
@@ -1259,6 +1345,10 @@ final class RemoteTmuxControlConnection {
                let completion = activityQueryCompletions.removeValue(forKey: token) {
                 completion(nil)
             }
+            if case let .query(token) = kind,
+               let completion = queryCompletions.removeValue(forKey: token) {
+                completion(nil)
+            }
             // Errors are dropped by design (results correlate positionally), but
             // an invisible %error has already hidden one real bug — an unquoted
             // refresh-client -B that never subscribed — so leave a trace.
@@ -1384,6 +1474,9 @@ final class RemoteTmuxControlConnection {
             } else {
                 observers.emitPaneOutput(paneId, Self.altScreenExitSequence)
             }
+        case let .query(token):
+            // Return the raw reply body to the awaiting coordinator.
+            queryCompletions.removeValue(forKey: token)?(lines)
         case .other:
             break
         }
