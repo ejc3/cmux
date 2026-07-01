@@ -111,10 +111,13 @@ final class RemoteTmuxSessionChannel: RemoteTmuxSessionSource {
     func unsubscribePanePath(paneId: Int) { underlying.unsubscribePanePath(paneId: paneId) }
     func unsubscribePaneReflow(paneId: Int) { underlying.unsubscribePaneReflow(paneId: paneId) }
     func setSessionName(_ name: String) { scopedSessionName = name }
-    /// Forwards a reorder of *this session's* windows. Safe over the shared order:
-    /// the underlying permutes only the listed windows and leaves other sessions'
-    /// windows in place, so a scoped reorder never disturbs a sibling channel's view.
-    func applyWindowReorder(_ reordered: [Int]) { underlying.applyWindowReorder(reordered) }
+    /// Forwards a reorder of *this session's* windows, filtered to owned windows so a
+    /// stale/foreign id can never reach the shared order. The underlying permutes only
+    /// the listed windows and leaves other sessions' windows in place, so a scoped
+    /// reorder never disturbs a sibling channel's view.
+    func applyWindowReorder(_ reordered: [Int]) {
+        underlying.applyWindowReorder(reordered.filter { windowIds.contains($0) })
+    }
     func queryWindowActivity(windowId: Int, completion: @escaping ([Int: RemoteTmuxPaneForegroundState]?) -> Void) {
         underlying.queryWindowActivity(windowId: windowId, completion: completion)
     }
