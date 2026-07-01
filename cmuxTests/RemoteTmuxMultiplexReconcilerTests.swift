@@ -25,11 +25,10 @@ import Testing
         #expect(R.numericWindowId("") == nil)
     }
 
-    @Test func sessionViewDropsMalformedIdsAndParsesActive() {
-        let view = R.sessionView(ws("work", ["@1", "@bad", "@3"], active: "@3"))
+    @Test func sessionViewDropsMalformedIds() {
+        let view = R.sessionView(ws("work", ["@1", "@bad", "@3"]))
         #expect(view.sessionName == "work")
         #expect(view.windowIds == [1, 3])
-        #expect(view.activeWindowId == 3)
     }
 
     @Test func newSessionsAreCreated() {

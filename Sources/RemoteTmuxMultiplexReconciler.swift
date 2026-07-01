@@ -17,7 +17,6 @@ enum RemoteTmuxMultiplexReconciler {
     struct SessionView: Equatable {
         let sessionName: String
         let windowIds: Set<Int>
-        let activeWindowId: Int?
     }
 
     struct Plan: Equatable {
@@ -40,8 +39,7 @@ enum RemoteTmuxMultiplexReconciler {
     static func sessionView(_ ws: RemoteTmuxLinkedWorkspaceModel.Workspace) -> SessionView {
         SessionView(
             sessionName: ws.sessionName,
-            windowIds: Set(ws.windowIds.compactMap(numericWindowId)),
-            activeWindowId: ws.activeWindowId.flatMap(numericWindowId)
+            windowIds: Set(ws.windowIds.compactMap(numericWindowId))
         )
     }
 
