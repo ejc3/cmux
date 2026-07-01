@@ -22,7 +22,7 @@ final class RemoteTmuxWindowMirror {
     /// The bonsplit tab's panel id this window renders into.
     let panelId: UUID
 
-    @ObservationIgnored private weak var connection: RemoteTmuxControlConnection?
+    @ObservationIgnored private weak var connection: (any RemoteTmuxSessionSource)?
     /// Creates a configured manual-I/O pane panel whose input goes to `tmuxPaneId`.
     @ObservationIgnored private let makePanel: (_ tmuxPaneId: Int) -> TerminalPanel?
 
@@ -42,7 +42,7 @@ final class RemoteTmuxWindowMirror {
     init(
         windowId: Int,
         panelId: UUID,
-        connection: RemoteTmuxControlConnection,
+        connection: any RemoteTmuxSessionSource,
         layout: RemoteTmuxLayoutNode,
         makePanel: @escaping (_ tmuxPaneId: Int) -> TerminalPanel?
     ) {
