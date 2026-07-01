@@ -14,7 +14,7 @@ import CmuxRemoteSession
 final class RemoteTmuxSessionMirror {
     let host: RemoteTmuxHost
     private(set) var sessionName: String
-    let connection: RemoteTmuxControlConnection
+    let connection: any RemoteTmuxSessionSource
 
     /// Updates the tracked session name after a `rename-session`.
     func setSessionName(_ name: String) { sessionName = name }
@@ -56,7 +56,7 @@ final class RemoteTmuxSessionMirror {
     private var titleFilters: [Int: RemoteTmuxScreenTitleFilter] = [:]
     /// Per-window multi-pane renderers (present once a window has >1 pane).
     private var windowMirrorByWindowId: [Int: RemoteTmuxWindowMirror] = [:]
-    private var observerToken: RemoteTmuxControlConnection.ObserverToken?
+    private var observerToken: UUID?
     /// Initial client-sizing retry; see ``scheduleInitialClientSizing()``.
     private var initialSizingTask: Task<Void, Never>?
     /// Re-arm the initial sizing when one of this workspace's surfaces becomes
@@ -69,7 +69,7 @@ final class RemoteTmuxSessionMirror {
     init(
         host: RemoteTmuxHost,
         sessionName: String,
-        connection: RemoteTmuxControlConnection,
+        connection: any RemoteTmuxSessionSource,
         tabManager: TabManager,
         workspace: Workspace
     ) {
@@ -82,7 +82,7 @@ final class RemoteTmuxSessionMirror {
 
         // Register as one of possibly several observers — never overwrite a
         // single shared closure on the connection.
-        self.observerToken = connection.addObserver(
+        self.observerToken = connection.addObserver(RemoteTmuxSessionObservers(
             onPaneOutput: { [weak self] paneId, data in
                 self?.routeOutput(paneId: paneId, data: data)
             },
@@ -112,7 +112,7 @@ final class RemoteTmuxSessionMirror {
                 // arrives while not connected).
                 if state != .connected { self?.titleFilters.removeAll() }
             }
-        )
+        ))
         rebuild()
         installSurfaceReadinessObservers(workspaceId: workspace.id)
     }
