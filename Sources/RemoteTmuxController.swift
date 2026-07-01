@@ -777,7 +777,7 @@ final class RemoteTmuxController {
     /// `activePaneId` is checked first so a multi-pane window names the pane
     /// the user is looking at, then `paneOrder` (the window's layout order).
     static func mirrorTabActivity(
-        states: [Int: RemoteTmuxControlConnection.PaneForegroundState],
+        states: [Int: RemoteTmuxPaneForegroundState],
         paneOrder: [Int],
         activePaneId: Int?
     ) -> MirrorTabActivity {
@@ -800,7 +800,7 @@ final class RemoteTmuxController {
     ) -> MirrorTabActivity {
         let connection = target.mirror.connection
         let order = connection.windowsByID[target.windowId]?.paneIDsInOrder ?? []
-        var states: [Int: RemoteTmuxControlConnection.PaneForegroundState] = [:]
+        var states: [Int: RemoteTmuxPaneForegroundState] = [:]
         for paneId in order {
             states[paneId] = connection.paneForegroundStates[paneId]
         }
