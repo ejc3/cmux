@@ -55,7 +55,8 @@ import Testing
         func setClientSize(columns: Int, rows: Int) { clientSizes.append((columns, rows)) }
         func resizeWindow(windowId: Int, columns: Int, rows: Int) { resizes.append((windowId, columns, rows)) }
         func setSessionName(_ name: String) {}
-        func applyWindowReorder(_ reordered: [Int]) {}
+        private(set) var reorders: [[Int]] = []
+        func applyWindowReorder(_ reordered: [Int]) { reorders.append(reordered) }
         func queryWindowActivity(windowId: Int, completion: @escaping ([Int: RemoteTmuxPaneForegroundState]?) -> Void) { completion(nil) }
         func queryPaneActivity(paneId: Int, completion: @escaping ([Int: RemoteTmuxPaneForegroundState]?) -> Void) { completion(nil) }
         @discardableResult func pastePane(paneId: Int, text: String) -> Bool { true }
@@ -231,6 +232,13 @@ import Testing
         _ = channel.addObserver(RemoteTmuxSessionObservers(onSessionChanged: { _, _ in renames += 1 }))
         fake.emitSessionChanged("view", "view2")   // describes the hidden view session, not ours
         #expect(renames == 0)
+    }
+
+    @Test func applyWindowReorderFiltersForeignWindowIds() {
+        let fake = makeFake()
+        let channel = RemoteTmuxSessionChannel(underlying: fake, sessionName: "A", sessionId: 3, windowIds: [1, 5])
+        channel.applyWindowReorder([5, 1, 2])   // 2 belongs to a sibling session
+        #expect(fake.reorders == [[5, 1]])       // foreign id dropped before it reaches the shared order
     }
 
     @Test func unsubscribeCommandsPassThrough() {
