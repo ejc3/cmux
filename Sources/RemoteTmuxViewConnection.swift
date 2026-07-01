@@ -88,6 +88,10 @@ final class RemoteTmuxViewConnection {
         try await ensureViewSession()
         let conn = RemoteTmuxControlConnection(
             host: host, sessionName: view.sessionName, createIfMissing: false)
+        // Windows are sized per-window (`resize-window`), not by this shared client, so
+        // the seed must use each window's own height and defer until it's known rather
+        // than fall back to the view session's rows.
+        conn.usesPerWindowSizing = true
         observerToken = conn.addObserver(
             onTopologyChanged: { [weak self] in self?.scheduleReconcile() },
             onExit: { [weak self] in self?.handleEnded() },
