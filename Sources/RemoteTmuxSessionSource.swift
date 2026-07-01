@@ -77,6 +77,9 @@ protocol RemoteTmuxSessionSource: AnyObject {
     func unsubscribePaneReflow(paneId: Int)
     /// Sizes the control client / this session's windows.
     func setClientSize(columns: Int, rows: Int)
+    /// Sizes a single window (multiplexed mode: the view session is window-size
+    /// manual, so each window is sized independently rather than via the shared client).
+    func resizeWindow(windowId: Int, columns: Int, rows: Int)
     /// Updates the cached session name (after a confirmed rename).
     func setSessionName(_ name: String)
     /// Applies a reordered window list to the cached order.
