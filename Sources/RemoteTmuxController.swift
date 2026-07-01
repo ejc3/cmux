@@ -39,6 +39,14 @@ final class RemoteTmuxController {
     /// like ``sessionMirrors`` (host+session). Each backs one mirror.
     private var channelsByHostSession: [String: RemoteTmuxSessionChannel] = [:]
 
+    /// Session names the user asked to kill over a host's shared view stream but whose
+    /// `kill-session` may not have landed yet (fire-and-forget; dropped while
+    /// reconnecting). Keyed by host connectionHash. The reconcile retries the kill for
+    /// any still-present entry, drops entries once the session is gone, and refuses to
+    /// re-surface a workspace for a pending-kill session — so a close can neither zombie
+    /// (session survives, no retry) nor resurrect (workspace reappears).
+    private var pendingKillSessionsByHost: [String: Set<String>] = [:]
+
     init() {}
 
     /// Synchronous read of the `remoteTmux` beta flag for AppKit/socket paths
@@ -604,6 +612,18 @@ final class RemoteTmuxController {
         let plan = RemoteTmuxMultiplexReconciler.plan(
             workspaces: view.workspaces, existingSessionNames: existing)
 
+        // Pending-kill upkeep: retry the kill for any closed session still present (its
+        // send was dropped, e.g. while reconnecting), and forget entries whose session
+        // is now gone (kill confirmed). Below, `create` skips pending-kill names so a
+        // just-closed workspace can't resurrect before the kill lands.
+        var pendingKill = pendingKillSessionsByHost[host.connectionHash] ?? []
+        if !pendingKill.isEmpty {
+            let present = Set(view.workspaces.map(\.sessionName))
+            for name in pendingKill where present.contains(name) { view.killWorkspaceSession(named: name) }
+            pendingKill.formIntersection(present)
+            pendingKillSessionsByHost[host.connectionHash] = pendingKill.isEmpty ? nil : pendingKill
+        }
+
         for name in plan.remove {
             let key = Self.connectionKey(host: host, sessionName: name)
             guard let mirror = teardownMultiplexedMirror(key: key) else { continue }
@@ -616,7 +636,7 @@ final class RemoteTmuxController {
             let key = Self.connectionKey(host: host, sessionName: sessionView.sessionName)
             channelsByHostSession[key]?.updateWindowIds(sessionView.windowIds)
         }
-        for sessionView in plan.create {
+        for sessionView in plan.create where !pendingKill.contains(sessionView.sessionName) {
             let key = Self.connectionKey(host: host, sessionName: sessionView.sessionName)
             let channel = RemoteTmuxSessionChannel(
                 underlying: shared,
@@ -659,6 +679,7 @@ final class RemoteTmuxController {
         for key in keys { teardownMultiplexedMirror(key: key) }
         multiplexedViewsByHost[host.connectionHash]?.stop()
         multiplexedViewsByHost[host.connectionHash] = nil
+        pendingKillSessionsByHost[host.connectionHash] = nil
         windowRegistry.unbind(hostHash: host.connectionHash)
         if !multiplexerHostStillInUse(host) {
             transportRegistry.remove(connectionHash: host.connectionHash)
@@ -871,13 +892,15 @@ final class RemoteTmuxController {
         let oldKey = Self.connectionKey(host: host, sessionName: oldName)
         let newKey = Self.connectionKey(host: host, sessionName: safeName)
         if let existing = sessionMirrors[newKey], existing !== mirror { return }
-        // Bail if newKey is already held by a DIFFERENT connection. Compare the two
-        // map entries (both the concrete cached connection) rather than
-        // `mirror.connection`: the mirror's source is an abstract
-        // `RemoteTmuxSessionSource`, which need not be the object stored in
-        // `connectionsByHostSession`, so an identity check against it would be
-        // meaningless the moment a session's source isn't its own connection.
-        if let existing = connectionsByHostSession[newKey], existing !== connectionsByHostSession[oldKey] { return }
+        // Bail if newKey is already held by a DIFFERENT connection than this mirror's.
+        // Compare against the mirror's OWN source identity (as GA always did): the two
+        // `%session-changed` observers on a connection fire unordered, so the cached
+        // handler may have already re-keyed `connectionsByHostSession` old→new —
+        // comparing map-entry-to-map-entry (`[newKey]` vs `[oldKey]`) then reads a
+        // nil'd `[oldKey]` and wrongly bails, dropping the GA rename's title update.
+        // For a multiplexed mirror the source is a channel (never cached), so `[newKey]`
+        // is nil and this guard correctly no-ops.
+        if let existing = connectionsByHostSession[newKey], existing !== (mirror.connection as AnyObject) { return }
 
         mirror.setSessionName(safeName)
         mirror.connection.setSessionName(safeName)
@@ -1401,9 +1424,21 @@ final class RemoteTmuxController {
         // (its channels aren't in `connectionsByHostSession`, so the GA path below would
         // leak the shared `-CC`). `stopMultiplexedHost` detaches every channel, stops the
         // view, unbinds the host, and drops the transport/master.
-        if multiplexedViewsByHost[host.connectionHash] != nil {
+        if let view = multiplexedViewsByHost[host.connectionHash] {
             windowRegistry.unbind(windowId: windowId)
-            stopMultiplexedHost(host: host)
+            if let pending = pendingKillSessionsByHost[host.connectionHash], !pending.isEmpty {
+                // Explicit kill-on-close: the fire-and-forget kills from
+                // handleWorkspaceClosed may not have flushed before we stop the stream.
+                // Await the barrier kill over the shared stream FIRST so "kill" can't
+                // degrade to "detach" (session surviving on the server).
+                pendingKillSessionsByHost[host.connectionHash] = nil
+                Task { @MainActor [weak self] in
+                    await view.killAllWorkspaceSessions()
+                    self?.stopMultiplexedHost(host: host)
+                }
+            } else {
+                stopMultiplexedHost(host: host)
+            }
             return
         }
         let closingWorkspaceIds = Set(AppDelegate.shared?.tabManagerFor(windowId: windowId)?.tabs.map(\.id) ?? [])
@@ -1455,13 +1490,15 @@ final class RemoteTmuxController {
         // unlink the windows. Remove local bookkeeping now so the reconcile treats it
         // as gone; tear the whole view down when this was the last session.
         if let view = multiplexedViewsByHost[host.connectionHash], isMultiplexed(mirror) {
-            // Kill over the shared stream (a one-shot ssh would be refused on a
-            // single-connection host). `killWorkspaceSession` reconciles over the SAME
-            // stream (FIFO: the kill lands before the reconcile's list-sessions), and the
-            // reconcile drops the mirror + channel and tears the view + window down when
-            // this was the last session. Do NOT stop the view synchronously here — the
-            // kill is fire-and-forget on that stream, so stopping now could drop it before
-            // the kill flushes, leaving the remote session alive.
+            // Remove the mirror + channel NOW (matches GA; the comment used to claim this
+            // but the code didn't — leaving a stranded entry until the async reconcile).
+            teardownMultiplexedMirror(key: entry.key)
+            // Mark the session pending-kill so the reconcile won't re-surface a workspace
+            // for it (no resurrection) and retries the kill if this send is dropped (no
+            // zombie). Kill over the shared stream — a one-shot ssh would be refused on a
+            // single-connection host. Do NOT stop the view here: it's fire-and-forget on
+            // that stream, and the reconcile drives last-session teardown.
+            pendingKillSessionsByHost[host.connectionHash, default: []].insert(sessionName)
             view.killWorkspaceSession(named: sessionName)
             return
         }

@@ -169,6 +169,12 @@ final class RemoteTmuxControlConnection {
     private var appliedWindowSizes: [Int: (columns: Int, rows: Int)] = [:]
     private var windowResizeDebounceTask: Task<Void, Never>?
 
+    /// Set by the multiplexer view connection: windows are sized per-window
+    /// (`resize-window`), NOT by the shared client, so a window with no per-window size
+    /// yet must DEFER its seed rather than fall back to the shared client's rows (the
+    /// hidden view session's height, which over-pads — the seed-shift class of bug).
+    var usesPerWindowSizing = false
+
     /// Trailing-edge debounce for `refresh-client -C`. SwiftUI layout settle makes the
     /// rendered grid oscillate (e.g. cols 154→155→156→161→…, ~15 distinct grids in
     /// ~1.3s), and each previously sent its own `refresh-client -C` → ~15 SIGWINCH /
@@ -478,7 +484,12 @@ final class RemoteTmuxControlConnection {
     /// coalesces into one `resize-window` per window.
     func resizeWindow(windowId: Int, columns: Int, rows: Int) {
         guard columns > 0, rows > 0 else { return }
+        let sizeChanged = pendingWindowSizes[windowId]?.rows != rows || pendingWindowSizes[windowId]?.columns != columns
         pendingWindowSizes[windowId] = (columns, rows)
+        // Now that this window's own surface size is known, re-seed any of its panes
+        // whose seed deferred waiting for it (multiplexer: the seed can complete before
+        // the first resize, and must NOT fall back to the shared view client's rows).
+        if sizeChanged { reseedAllDeferredPanes() }
         guard connectionState == .connected else { return }
         windowResizeDebounceTask?.cancel()
         windowResizeDebounceTask = Task { @MainActor [weak self] in
@@ -1363,6 +1374,12 @@ final class RemoteTmuxControlConnection {
             applySessionNameChange(sessionId: id, name: renameName, event: "session-renamed", refetchWindows: false)
         case .sessionsChanged:
             record("sessions-changed")
+            // A session added/removed on the server (e.g. out-of-band `new-session` /
+            // `kill-session`, or another client) must drive a reconcile so the
+            // multiplexer view surfaces/removes the corresponding workspace. GA ignores
+            // it beyond a harmless mirror rebuild (its one session's windows are
+            // unchanged).
+            observers.notifyTopologyChanged()
         case let .windowAdd(id):
             record("window-add @\(id)")
             requestWindows()
@@ -1749,6 +1766,11 @@ final class RemoteTmuxControlConnection {
         if let windowId, let rows = (pendingWindowSizes[windowId] ?? appliedWindowSizes[windowId])?.rows {
             return rows
         }
+        // Multiplexer: a specific window with no per-window size yet DEFERS its seed
+        // (nil) rather than falling back to the shared client — the view session's rows
+        // (e.g. 40) would over-pad a smaller window. `resizeWindow` re-seeds once the
+        // size lands. GA (usesPerWindowSizing == false) keeps the client fallback.
+        if usesPerWindowSizing, windowId != nil { return nil }
         return lastClientSize?.rows
     }
 
