@@ -604,7 +604,13 @@ final class RemoteTmuxController {
         let oldKey = Self.connectionKey(host: host, sessionName: oldName)
         let newKey = Self.connectionKey(host: host, sessionName: safeName)
         if let existing = sessionMirrors[newKey], existing !== mirror { return }
-        if let existing = connectionsByHostSession[newKey], existing !== mirror.connection { return }
+        // Bail if newKey is already held by a DIFFERENT connection. Compare the two
+        // map entries (both the concrete cached connection) rather than
+        // `mirror.connection`: the mirror's source is an abstract
+        // `RemoteTmuxSessionSource`, which need not be the object stored in
+        // `connectionsByHostSession`, so an identity check against it would be
+        // meaningless the moment a session's source isn't its own connection.
+        if let existing = connectionsByHostSession[newKey], existing !== connectionsByHostSession[oldKey] { return }
 
         mirror.setSessionName(safeName)
         mirror.connection.setSessionName(safeName)
