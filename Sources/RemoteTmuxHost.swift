@@ -360,4 +360,15 @@ struct RemoteTmuxHost: Sendable, Equatable, Identifiable {
             sshOptions: []
         )
     }
+
+    /// FNV-1a 64-bit hex digest — a stable, dependency-free short hash used to
+    /// derive collision-resistant identifiers from a string.
+    static func fnv1a64Hex(_ string: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325 // FNV offset basis
+        for byte in string.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3 // FNV prime
+        }
+        return String(format: "%016llx", hash)
+    }
 }

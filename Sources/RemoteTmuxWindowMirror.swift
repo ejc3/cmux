@@ -150,7 +150,7 @@ final class RemoteTmuxWindowMirror {
     /// The pane's last-known foreground classification (alt-screen flag +
     /// `pane_current_command`), driving the kill-pane close confirmation.
     /// `nil` when the pane was never classified (closes without a dialog).
-    func paneForegroundState(_ tmuxPaneId: Int) -> RemoteTmuxControlConnection.PaneForegroundState? {
+    func paneForegroundState(_ tmuxPaneId: Int) -> RemoteTmuxPaneForegroundState? {
         connection?.paneForegroundStates[tmuxPaneId]
     }
 
@@ -160,7 +160,7 @@ final class RemoteTmuxWindowMirror {
     /// to ``paneForegroundState(_:)``.
     func queryPaneActivity(
         _ tmuxPaneId: Int,
-        completion: @escaping ([Int: RemoteTmuxControlConnection.PaneForegroundState]?) -> Void
+        completion: @escaping ([Int: RemoteTmuxPaneForegroundState]?) -> Void
     ) {
         guard let connection else {
             completion(nil)
