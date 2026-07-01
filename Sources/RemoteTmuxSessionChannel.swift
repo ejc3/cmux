@@ -180,11 +180,14 @@ final class RemoteTmuxSessionChannel: RemoteTmuxSessionSource {
                 self.recomputeOwnedPanes()
                 for o in self.observers.values { o.onTopologyChanged?() }
             },
-            onExit: { [weak self] in
-                // Connection-level (host stream) death fans to every channel; per-session
-                // end is driven by the coordinator's authoritative diff, not this signal.
-                guard let self else { return }
-                for o in self.observers.values { o.onExit?() }
+            onExit: {
+                // Deliberately NOT fanned. The shared stream's `%exit` is host-stream
+                // death; the view coordinator owns teardown for every session on the
+                // host (it removes each mirror + channel and discards the window). Fanning
+                // per-channel too would double-tear-down — each mirror would also run the
+                // dedicated-connection end path (a one-shot kill a single-connection host
+                // refuses, plus a per-session unbind), racing the coordinator. Transient
+                // reconnects still reach the mirror via `onConnectionStateChanged` below.
             },
             onConnectionStateChanged: { [weak self] state in
                 guard let self else { return }
