@@ -5355,6 +5355,11 @@ final class Workspace: Identifiable, ObservableObject {
     /// Ephemeral remote tmux mirror; excluded from cmux session restore.
     var isRemoteTmuxMirror: Bool = false
 
+    /// Disposable remote-tmux scaffolding (a dedicated window's bootstrap "welcome"
+    /// tab, before the first mirror surfaces): not the user's work, so teardown may
+    /// reclaim the window if the host dies before any real mirror appears.
+    var isRemoteTmuxDisposableLocalShell: Bool = false
+
     /// Per-window multi-pane renderers, keyed by mirrored window-tab panel id.
     private(set) var remoteTmuxWindowMirrors: [UUID: RemoteTmuxWindowMirror] = [:]
 

@@ -309,13 +309,15 @@ import Testing
         #expect(fake.seeded == [11])
     }
 
-    @Test func hostExitFansToChannel() {
+    @Test func hostExitIsNotFannedPerChannel() {
+        // The view coordinator owns teardown on host-stream death; the channel must not
+        // also fan %exit or every mirror would race a duplicate per-session teardown.
         let fake = makeFake()
         let channel = channelForA(fake)
         var exits = 0
         _ = channel.addObserver(RemoteTmuxSessionObservers(onExit: { exits += 1 }))
         fake.emitExit()
-        #expect(exits == 1)
+        #expect(exits == 0)
     }
 
     @Test func twoChannelsSplitOneStreamWithoutCrosstalk() {
