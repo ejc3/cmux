@@ -43,27 +43,18 @@ enum RemoteTmuxSessionListParser {
     /// - Returns: one ``RemoteTmuxSession`` per well-formed line, in input order.
     static func parse(_ output: String) -> [RemoteTmuxSession] {
         var sessions: [RemoteTmuxSession] = []
-        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
-            var line = String(rawLine)
-            if line.last == "\r" {
-                line.removeLast()
-            }
-            if line.isEmpty { continue }
-            // Unbounded split: the first four fields are id/windows/attached/
-            // created, and the name (which may itself contain `:`) is reassembled
-            // from the remainder below via `fields[4...].joined`, so a name with
-            // embedded delimiters is preserved rather than truncated here.
-            let fields = line.components(separatedBy: fieldDelimiter)
-            // Need at least id + windows + attached + created + name.
-            guard fields.count >= 5 else { continue }
+        // `splitRows` splits on any newline via `Character.isNewline` (so the `\r\n`
+        // grapheme cluster is handled — a plain `split(separator: "\n")` misses it,
+        // since Swift treats `\r\n` as one Character, and leaves the terminator on the
+        // trailing name field) and rejoins the free-text name (`fields[4]`), preserving
+        // any embedded `:`.
+        for fields in splitRows(output, fieldCount: 5) {
             let id = fields[0].trimmingCharacters(in: .whitespaces)
             guard !id.isEmpty else { continue }
             let windowCount = Int(fields[1].trimmingCharacters(in: .whitespaces)) ?? 0
             let attached = (Int(fields[2].trimmingCharacters(in: .whitespaces)) ?? 0) > 0
             let createdUnix = Int(fields[3].trimmingCharacters(in: .whitespaces))
-            // The name is the remainder, rejoined so an embedded delimiter (should
-            // one ever survive) is preserved rather than truncating the name.
-            let name = fields[4...].joined(separator: fieldDelimiter)
+            let name = fields[4]
             sessions.append(
                 RemoteTmuxSession(
                     id: id,
