@@ -767,4 +767,17 @@ import Testing
         #expect(c.desiredSurfaceRows(forWindow: 1) == 30)
         #expect(c.desiredSurfaceRows() == 30)
     }
+
+    @Test func perWindowSizingDefersUnknownWindowInsteadOfClientFallback() {
+        // Multiplexer: a window with no per-window size yet must DEFER its seed (nil)
+        // rather than fall back to the shared view client's rows (which over-pads and
+        // caused the attach-time shift). Once resizeWindow lands, it uses that size.
+        let c = connection()
+        c.usesPerWindowSizing = true
+        c.setClientSize(columns: 120, rows: 40)   // the hidden view client
+        #expect(c.desiredSurfaceRows(forWindow: 7) == nil)   // defer, NOT 40
+        c.resizeWindow(windowId: 7, columns: 97, rows: 37)
+        #expect(c.desiredSurfaceRows(forWindow: 7) == 37)    // now the window's own size
+        #expect(c.desiredSurfaceRows(forWindow: nil) == 40)  // view-level query keeps client
+    }
 }
