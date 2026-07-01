@@ -105,6 +105,10 @@ final class RemoteTmuxControlConnection {
     /// the cached classification instead of hanging until a reconnect that may
     /// never come.
     private var activityQueryCompletions: [UUID: ([Int: PaneForegroundState]?) -> Void] = [:]
+    /// In-flight generic ``query(_:)`` completions, keyed by token. Resolved with
+    /// the reply body lines, or `nil` if the command errored or the stream became
+    /// unusable — so an awaiting caller never hangs.
+    private var queryCompletions: [UUID: ([String]?) -> Void] = [:]
 
     private var process: Process?
     private var stdinWriter: RemoteTmuxControlPipeWriter?
@@ -154,6 +158,16 @@ final class RemoteTmuxControlConnection {
     /// reverting to ssh's default 80×24.
     private var lastClientSize: (columns: Int, rows: Int)?
     private var pendingPostAttachAction: PostAttachAction?
+
+    /// Per-window desired sizes for the linked-view path, where ONE control client
+    /// is shared by every mirrored window so a single `refresh-client -C` can't size
+    /// them independently. Each window is sized explicitly via `resize-window -t @id`
+    /// (the view session runs `window-size manual`). `pending` is the latest request
+    /// per window; `applied` is what we last sent, so the debounced flush skips
+    /// no-ops; both are re-applied after a reconnect.
+    private var pendingWindowSizes: [Int: (columns: Int, rows: Int)] = [:]
+    private var appliedWindowSizes: [Int: (columns: Int, rows: Int)] = [:]
+    private var windowResizeDebounceTask: Task<Void, Never>?
 
     /// Trailing-edge debounce for `refresh-client -C`. SwiftUI layout settle makes the
     /// rendered grid oscillate (e.g. cols 154→155→156→161→…, ~15 distinct grids in
@@ -351,6 +365,7 @@ final class RemoteTmuxControlConnection {
         // Normally already flushed by beginReconnecting; kept here so a future
         // caller of spawnProcess can't strand a close decision.
         failPendingActivityQueries()
+        failPendingQueries()
         attachBlockDrained = false
         stderrBuffer = ""
         enterReceived = false
@@ -453,6 +468,50 @@ final class RemoteTmuxControlConnection {
     @discardableResult
     func send(_ command: String) -> Bool {
         sendInternal(command, kind: .other)
+    }
+
+    /// Sizes ONE mirrored window to `columns`×`rows` cells via `resize-window -t @id`
+    /// — the linked-view analogue of ``setClientSize(columns:rows:)``. The shared
+    /// view client can't size each window via `refresh-client -C`, so windows are
+    /// resized explicitly (the view session runs `window-size manual`). Records the
+    /// size for reconnect reseed; debounced so SwiftUI's layout-settle oscillation
+    /// coalesces into one `resize-window` per window.
+    func resizeWindow(windowId: Int, columns: Int, rows: Int) {
+        guard columns > 0, rows > 0 else { return }
+        pendingWindowSizes[windowId] = (columns, rows)
+        guard connectionState == .connected else { return }
+        windowResizeDebounceTask?.cancel()
+        windowResizeDebounceTask = Task { @MainActor [weak self] in
+            do {
+                try await ContinuousClock().sleep(for: .milliseconds(Self.clientSizeDebounceMs))
+            } catch {
+                return
+            }
+            guard let self, self.connectionState == .connected else { return }
+            self.flushWindowResizes()
+        }
+    }
+
+    /// Sends `resize-window` for every window whose desired size differs from what we
+    /// last applied (skipping no-ops). Used by the debounce and by reconnect reseed.
+    ///
+    /// Only sizes windows that currently exist (`windowsByID`): a window can leave the
+    /// topology (closed, or unlinked from the view) while a size lingers in
+    /// `pendingWindowSizes` — and reconnect reseed clears `appliedWindowSizes` and
+    /// resends everything. Targeting a vanished id raises tmux `can't find window: @N`
+    /// (e.g. `@0`) and aborts the rest of the flush, leaving live windows the wrong
+    /// size. `windowsByID` is freshly repopulated before reseed runs, so this skips
+    /// only genuinely-gone windows; their pending entries are kept (harmless) in case
+    /// the id reappears.
+    private func flushWindowResizes() {
+        for (windowId, size) in pendingWindowSizes
+        where windowsByID[windowId] != nil
+            && (appliedWindowSizes[windowId]?.columns != size.columns
+                || appliedWindowSizes[windowId]?.rows != size.rows) {
+            if send("resize-window -t @\(windowId) -x \(size.columns) -y \(size.rows)") {
+                appliedWindowSizes[windowId] = size
+            }
+        }
     }
 
     /// Sizes the tmux control client to `columns`×`rows` cells (tmux
@@ -814,6 +873,122 @@ final class RemoteTmuxControlConnection {
         sendActivityQuery(Self.paneActivityQueryCommand(paneId: paneId), completion: completion)
     }
 
+    /// Runs `command` over the live control stream and returns its `%begin`/`%end`
+    /// reply body (one string per line), or `nil` if the command errored or the
+    /// stream became unusable. This is how the linked-view coordinator snapshots
+    /// the server (`list-sessions`, `list-windows -a`) without a second concurrent
+    /// ssh — required on MaxSessions=1 hosts where the `-CC` client holds the one
+    /// allowed session. Replies correlate positionally via the pending-command
+    /// FIFO, exactly like the other typed commands.
+    func query(_ command: String) async -> [String]? {
+        await withCheckedContinuation { (continuation: CheckedContinuation<[String]?, Never>) in
+            guard connectionState == .connected else {
+                continuation.resume(returning: nil)
+                return
+            }
+            let token = UUID()
+            queryCompletions[token] = { continuation.resume(returning: $0) }
+            guard sendInternal(command, kind: .query(token)) else {
+                queryCompletions.removeValue(forKey: token)?(nil)
+                return
+            }
+        }
+    }
+
+    /// Like ``query(_:)`` but fails (returning nil) after `timeout` seconds instead
+    /// of awaiting `%end` forever. A wedged remote `run-shell` blocks tmux's command
+    /// queue, so the only recovery is to drop and re-establish the control
+    /// connection: on timeout this calls ``beginReconnecting()``, which also fails
+    /// all pending queries — that resolves the still-suspended ``query(_:)`` so the
+    /// task group can drain without leaking its continuation.
+    func queryWithTimeout(_ command: String, timeout: Double) async -> [String]? {
+        enum Outcome { case result([String]?); case timedOut }
+        return await withTaskGroup(of: Outcome.self) { group in
+            group.addTask { .result(await self.query(command)) }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(max(0, timeout) * 1_000_000_000))
+                return .timedOut
+            }
+            let first = await group.next() ?? .result(nil)
+            if case .timedOut = first {
+                // Recover the wedged stream; this also resolves the pending query
+                // continuation so the group's implicit drain doesn't deadlock.
+                self.beginReconnecting()
+            }
+            group.cancelAll()
+            if case .result(let lines) = first { return lines }
+            return nil
+        }
+    }
+
+    /// Uploads `data` to the remote host *in band* over this control connection
+    /// (no second SSH session/channel — works on `MaxSessions 1` hosts; no remote
+    /// helper binary), inserting it as `<tmp>/cmux-drop-*`. Returns the remote path,
+    /// or nil on any failure (size cap, disconnect, decode/size/checksum mismatch).
+    /// See ``RemoteTmuxInBandUpload`` for the wire protocol.
+    func uploadFileInBand(data: Data, remoteExtension: String?) async -> String? {
+        guard connectionState == .connected else { return nil }
+        guard data.count <= RemoteTmuxInBandUpload.maxFileBytes else { return nil }
+
+        let id = RemoteTmuxInBandUpload.makeID(UUID())
+        let ext = RemoteTmuxInBandUpload.sanitizedExtension(remoteExtension)
+
+        // Encode + checksum off the main actor (data is a value type) so a large
+        // file's CPU work doesn't block the UI.
+        let prepared = await Task.detached(priority: .userInitiated) {
+            (base64: data.base64EncodedString(), cksum: RemoteTmuxInBandUpload.posixCksum(data))
+        }.value
+
+        func runShell(_ shell: String, timeout: Double) async -> Bool {
+            await queryWithTimeout(RemoteTmuxInBandUpload.runShellCommand(shell), timeout: timeout) != nil
+        }
+
+        // NOTE (documented limitations of this v1 path): the upload streams to
+        // completion even if the UI operation is cancelled mid-flight; a timeout
+        // forces a reconnect, after which the best-effort temp cleanup can't be sent
+        // (leaving a remote /tmp/cmux-ul-* dir until the host clears it); and a
+        // multi-file batch isn't transactional (an earlier file's /tmp/cmux-drop-*
+        // can remain if a later one fails). None corrupt the user-visible result.
+        guard await runShell(RemoteTmuxInBandUpload.setupShellCommand(id: id), timeout: 15) else {
+            return nil
+        }
+
+        for chunk in RemoteTmuxInBandUpload.base64Chunks(prepared.base64) {
+            guard await runShell(
+                RemoteTmuxInBandUpload.appendShellCommand(id: id, chunk: chunk), timeout: 20
+            ) else {
+                _ = send(RemoteTmuxInBandUpload.runShellCommand("rm -rf \(RemoteTmuxInBandUpload.tempDir(id: id))"))
+                return nil
+            }
+        }
+
+        guard await runShell(
+            RemoteTmuxInBandUpload.finalizeShellCommand(id: id, sanitizedExtension: ext), timeout: 60
+        ) else {
+            _ = send(RemoteTmuxInBandUpload.runShellCommand("rm -rf \(RemoteTmuxInBandUpload.tempDir(id: id))"))
+            return nil
+        }
+
+        let ackOption = RemoteTmuxInBandUpload.ackOption(id: id)
+        let ackLines = await queryWithTimeout("show-options -gv \(ackOption)", timeout: 15)
+        _ = send("set -gu \(ackOption)")  // best-effort: drop the ack option
+        guard let ack = RemoteTmuxInBandUpload.parseAck(ackLines),
+              ack.size == data.count,
+              ack.cksum == prepared.cksum else {
+            return nil
+        }
+        return RemoteTmuxInBandUpload.outputPath(id: id, sanitizedExtension: ext)
+    }
+
+    /// Fails every in-flight ``query(_:)`` with `nil` — called whenever the control
+    /// stream becomes unusable, so awaiting coordinators don't hang.
+    private func failPendingQueries() {
+        guard !queryCompletions.isEmpty else { return }
+        let completions = Array(queryCompletions.values)
+        queryCompletions.removeAll()
+        for completion in completions { completion(nil) }
+    }
+
     private func sendActivityQuery(
         _ command: String, completion: @escaping ([Int: PaneForegroundState]?) -> Void
     ) {
@@ -935,6 +1110,7 @@ final class RemoteTmuxControlConnection {
     /// (``stop()``) and a genuine remote end (`%exit`).
     private func cancelScheduledWork() {
         failPendingActivityQueries()
+        failPendingQueries()
         reconnectTask?.cancel()
         reconnectTask = nil
         clientSizeDebounceTask?.cancel()
@@ -1058,6 +1234,7 @@ final class RemoteTmuxControlConnection {
         // The stream is dead: a close decision awaiting an activity query must
         // not hang for the whole backoff window — fail it onto the cache now.
         failPendingActivityQueries()
+        failPendingQueries()
         teardownProcessHandles()
         reconnectAttemptCount = 0
         connectionState = .reconnecting
@@ -1113,6 +1290,10 @@ final class RemoteTmuxControlConnection {
         if let size = lastClientSize {
             send("refresh-client -C \(size.columns)x\(size.rows)")
         }
+        // Linked-view per-window sizes: a fresh client reverts windows to default, so
+        // re-apply every recorded `resize-window` (clear applied → all resend).
+        appliedWindowSizes.removeAll()
+        flushWindowResizes()
         // The re-applied size is usually a no-op (the server kept the window at our
         // size across the transport drop), so TUIs get no SIGWINCH — kick them so
         // they repaint over the re-seeded (possibly stale) frame. FIFO-safe: the
@@ -1189,6 +1370,11 @@ final class RemoteTmuxControlConnection {
             activePaneByWindow[id] = nil
             windowsByID[id] = nil
             windowOrder.removeAll { $0 == id }
+            // Drop the closed window's recorded sizes so a later reseed (which clears
+            // appliedWindowSizes and resends every pending entry) can't issue
+            // `resize-window -t @id` for a window that no longer exists.
+            pendingWindowSizes[id] = nil
+            appliedWindowSizes[id] = nil
             // Release every per-pane map (byte baselines, foreground states, pending
             // seed rows, the geometry re-seed queue, best-effort heights) for panes the
             // closed window owned, so nothing accumulates across window churn.
@@ -1294,6 +1480,10 @@ final class RemoteTmuxControlConnection {
             // decision is waiting on it and falls back to the cached state.
             if case let .activityQuery(token) = kind,
                let completion = activityQueryCompletions.removeValue(forKey: token) {
+                completion(nil)
+            }
+            if case let .query(token) = kind,
+               let completion = queryCompletions.removeValue(forKey: token) {
                 completion(nil)
             }
             // A seed command that errors (e.g. the pane exited between the capture
@@ -1512,6 +1702,9 @@ final class RemoteTmuxControlConnection {
             } else {
                 observers.emitPaneOutput(paneId, Self.altScreenExitSequence)
             }
+        case let .query(token):
+            // Return the raw reply body to the awaiting coordinator.
+            queryCompletions.removeValue(forKey: token)?(lines)
         case .other:
             break
         }
