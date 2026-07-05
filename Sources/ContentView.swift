@@ -9384,9 +9384,9 @@ struct ContentView: View {
         var openedCount = 0
         if BrowserLinkOpenSettings.openSidebarPullRequestLinksInCmuxBrowser() {
             for pullRequest in pullRequests {
-                if tabManager.openBrowser(url: pullRequest.url, insertAtEnd: true) != nil {
-                    openedCount += 1
-                } else if NSWorkspace.shared.open(pullRequest.url) {
+                let openedEmbedded = !BrowserLinkOpenSettings.linkEscapesToSystemBrowser(pullRequest.url)
+                    && tabManager.openBrowser(url: pullRequest.url, insertAtEnd: true) != nil
+                if openedEmbedded || NSWorkspace.shared.open(pullRequest.url) {
                     openedCount += 1
                 }
             }
@@ -15021,25 +15021,18 @@ struct TabItemView: View, Equatable {
     }
 
     private func openPullRequestLink(_ url: URL) {
-        updateSelection()
-        if openSidebarPullRequestLinksInCmuxBrowser {
-            if tabManager.openBrowser(
-                inWorkspace: tab.id,
-                url: url,
-                preferSplitRight: true,
-                insertAtEnd: true
-            ) == nil {
-                NSWorkspace.shared.open(url)
-            }
-            return
-        }
-        NSWorkspace.shared.open(url)
+        openSidebarLink(url, preferEmbedded: openSidebarPullRequestLinksInCmuxBrowser)
     }
 
     private func openPortLink(_ port: Int) {
         guard let url = URL(string: "http://localhost:\(port)") else { return }
+        openSidebarLink(url, preferEmbedded: openSidebarPortLinksInCmuxBrowser)
+    }
+
+    private func openSidebarLink(_ url: URL, preferEmbedded: Bool) {
         updateSelection()
-        if openSidebarPortLinksInCmuxBrowser {
+        if preferEmbedded,
+           !BrowserLinkOpenSettings.linkEscapesToSystemBrowser(url) {
             if tabManager.openBrowser(
                 inWorkspace: tab.id,
                 url: url,
