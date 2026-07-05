@@ -1,6 +1,7 @@
 import Foundation
 import CmuxCore
 import CmuxBrowser
+import CmuxTestSupport
 import CmuxFoundation
 import CmuxSettings
 import Combine
@@ -1224,6 +1225,16 @@ func browserOpenExternalNavigationURL(
     webView: WKWebView,
     presentAlert: BrowserAlertPresenter = browserPresentAlert
 ) -> Bool {
+#if DEBUG
+    // UI tests observe external-open routing through the capture sink; a
+    // configured sink intercepts the open so CI never launches a real browser.
+    if UITestCaptureSink().appendLineIfConfigured(
+        envKey: "CMUX_UI_TEST_CAPTURE_EXTERNAL_OPEN_PATH",
+        line: "\(source) \(url.absoluteString)"
+    ) {
+        return true
+    }
+#endif
     let opened = NSWorkspace.shared.open(url)
     if !opened {
         browserPresentExternalNavigationFailure(for: url, in: webView, presentAlert: presentAlert)

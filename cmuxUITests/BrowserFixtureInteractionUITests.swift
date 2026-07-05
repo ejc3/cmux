@@ -41,6 +41,11 @@ class BrowserFixtureSocketTestCase: XCTestCase {
 
     // MARK: - Launch
 
+    /// Subclass hooks for extra launch configuration (defaults registered via
+    /// NSArgumentDomain, capture-sink env keys, ...).
+    var extraLaunchArguments: [String] { [] }
+    var extraLaunchEnvironment: [String: String] { [:] }
+
     @discardableResult
     func launchApp() throws -> XCUIApplication {
         let app = XCUIApplication()
@@ -49,6 +54,7 @@ class BrowserFixtureSocketTestCase: XCTestCase {
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
         ]
+        app.launchArguments += extraLaunchArguments
         app.launchEnvironment["CMUX_UI_TEST_MODE"] = "1"
         app.launchEnvironment["CMUX_SOCKET_ENABLE"] = "1"
         app.launchEnvironment["CMUX_SOCKET_MODE"] = "allowAll"
@@ -61,6 +67,9 @@ class BrowserFixtureSocketTestCase: XCTestCase {
         app.launchEnvironment["CMUX_TAG"] = launchTag
         if let path = ProcessInfo.processInfo.environment["PATH"], !path.isEmpty {
             app.launchEnvironment["PATH"] = path
+        }
+        for (key, value) in extraLaunchEnvironment {
+            app.launchEnvironment[key] = value
         }
         self.app = app
         // On headless CI runners (no GUI session), XCUIApplication.launch()
@@ -91,6 +100,12 @@ class BrowserFixtureSocketTestCase: XCTestCase {
 
     /// Sends one V2 request and returns the raw response envelope
     /// (`{"id":…,"ok":…,"result"/"error":…}`), or nil if the socket did not answer.
+    /// Falls back to the `nc -U` transport when the in-process Darwin client
+    /// cannot connect (see `controlSocketCommandViaNetcat`), matching
+    /// `BrowserPaneNavigationKeybindUITests`, and finally to the bundled CLI
+    /// binary: some hosts refuse unix-socket connects from the UI-test runner
+    /// and its child processes entirely, while a full `cmux rpc` invocation
+    /// (the same client real users script with) connects fine.
     func socketEnvelope(
         method: String,
         params: [String: Any],
@@ -102,6 +117,66 @@ class BrowserFixtureSocketTestCase: XCTestCase {
             "params": params,
         ]
         return ControlSocketClient(path: socketPath, responseTimeout: responseTimeout).sendJSON(request)
+            ?? controlSocketJSONViaNetcat(request, socketPath: socketPath, responseTimeout: responseTimeout)
+            ?? socketEnvelopeViaBundledCLI(method: method, params: params)
+    }
+
+    /// Runs `cmux rpc <method> <json>` from the app bundle the UI test built,
+    /// pointed at this test's socket. Returns a synthesized success envelope
+    /// (the CLI exits non-zero on `ok: false` responses and transport errors).
+    private func socketEnvelopeViaBundledCLI(
+        method: String,
+        params: [String: Any]
+    ) -> [String: Any]? {
+        guard let cli = Self.bundledCLIPath(),
+              JSONSerialization.isValidJSONObject(params),
+              let paramsData = try? JSONSerialization.data(withJSONObject: params),
+              let paramsJSON = String(data: paramsData, encoding: .utf8) else {
+            return nil
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: cli)
+        process.arguments = ["rpc", method, paramsJSON]
+        var environment = ProcessInfo.processInfo.environment
+        for key in environment.keys where key.hasPrefix("CMUX_") {
+            environment.removeValue(forKey: key)
+        }
+        environment["CMUX_SOCKET_PATH"] = socketPath
+        process.environment = environment
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        guard let result = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        return ["ok": true, "result": result]
+    }
+
+    /// Locates `Contents/Resources/bin/cmux` inside the app the test target
+    /// built, starting from the test bundle's products directory.
+    private static func bundledCLIPath() -> String? {
+        // …/Build/Products/Debug/cmuxUITests-Runner.app/PlugIns/cmuxUITests.xctest
+        var productsDir = URL(fileURLWithPath: Bundle(for: BrowserFixtureSocketTestCase.self).bundlePath)
+        for _ in 0..<3 { productsDir.deleteLastPathComponent() }
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: productsDir.path)) ?? []
+        for entry in entries where entry.hasSuffix(".app") {
+            let cli = productsDir
+                .appendingPathComponent(entry)
+                .appendingPathComponent("Contents/Resources/bin/cmux")
+                .path
+            if FileManager.default.isExecutableFile(atPath: cli) {
+                return cli
+            }
+        }
+        return nil
     }
 
     /// Sends one V2 request, asserts `ok == true`, and returns `result`.
@@ -281,9 +356,25 @@ class BrowserFixtureSocketTestCase: XCTestCase {
                 for candidate in self.socketCandidates() {
                     guard FileManager.default.fileExists(atPath: candidate) else { continue }
                     if ControlSocketClient(path: candidate, responseTimeout: 1.0).sendLine("ping") == "PONG" {
+                        NSLog("BrowserFixtureSocketTestCase readiness via in-process client: %@", candidate)
                         self.socketPath = candidate
                         return true
                     }
+                    if self.controlSocketCommandViaNetcat("ping", socketPath: candidate) == "PONG" {
+                        NSLog("BrowserFixtureSocketTestCase readiness via nc fallback: %@", candidate)
+                        self.socketPath = candidate
+                        return true
+                    }
+                }
+                // The in-process client (and nc) can fail to connect on some
+                // hosts even while the app's own sanity probe proves the
+                // listener is bound and answering; accept that probe.
+                let diagnostics = self.loadDiagnostics()
+                if self.controlSocketDiagnosticsReportReady(diagnostics),
+                   let expectedPath = diagnostics["socketExpectedPath"], !expectedPath.isEmpty {
+                    NSLog("BrowserFixtureSocketTestCase readiness via app diagnostics only: %@", expectedPath)
+                    self.socketPath = expectedPath
+                    return true
                 }
                 return false
             }
