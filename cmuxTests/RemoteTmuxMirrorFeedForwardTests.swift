@@ -87,6 +87,66 @@ import Testing
         connection.lastWindowSizes[0].map { (cols: $0.0, rows: $0.1) }
     }
 
+    // MARK: fresh-connect wedge (container reading resolution)
+
+    /// The wedge: a pre-window callback carries a full-display size while a good
+    /// size is already on record. It must be DEFERRED, not banked — otherwise
+    /// the claim sticks at the display ceiling and tmux, sized to the real
+    /// window, never matches.
+    @Test func preWindowReadingIsDeferredNotWedged() {
+        #expect(
+            RemoteTmuxWindowMirror.resolveContainerReading(
+                proposed: CGSize(width: 3000, height: 2000),
+                current: CGSize(width: 800, height: 600),
+                windowBound: nil,
+                displayBound: CGSize(width: 3000, height: 2000),
+                isVisible: true
+            ) == nil
+        )
+    }
+
+    /// Once a real window bounds the reading, it clamps to the window's content
+    /// rect — this is how a slightly-early banked size heals.
+    @Test func visibleWindowClampsAndHealsTheReading() {
+        #expect(
+            RemoteTmuxWindowMirror.resolveContainerReading(
+                proposed: CGSize(width: 3000, height: 2000),
+                current: CGSize(width: 800, height: 600),
+                windowBound: CGSize(width: 1200, height: 800),
+                displayBound: nil,
+                isVisible: true
+            ) == CGSize(width: 1200, height: 800)
+        )
+    }
+
+    /// The first-ever reading with no window yet still gets an initial claim,
+    /// capped to the display so it can never be unbounded.
+    @Test func firstReadingWithNoWindowClampsToDisplay() {
+        #expect(
+            RemoteTmuxWindowMirror.resolveContainerReading(
+                proposed: CGSize(width: 5000, height: 4000),
+                current: nil,
+                windowBound: nil,
+                displayBound: CGSize(width: 1512, height: 982),
+                isVisible: true
+            ) == CGSize(width: 1512, height: 982)
+        )
+    }
+
+    /// A degenerate first reading on a hidden mount is ignored so it doesn't
+    /// consume the one unvalidated slot the initial claim needs.
+    @Test func degenerateHiddenFirstReadingIsSkipped() {
+        #expect(
+            RemoteTmuxWindowMirror.resolveContainerReading(
+                proposed: CGSize(width: 1, height: 1),
+                current: nil,
+                windowBound: nil,
+                displayBound: CGSize(width: 1512, height: 982),
+                isVisible: false
+            ) == nil
+        )
+    }
+
     // MARK: structure signature
 
     @Test func signatureIgnoresGeometry() {
@@ -200,15 +260,24 @@ import Testing
         // the container — that staleness was a fraction disease), so the
         // observable is the overconstrained case: a container too small for
         // the assigned cells must rescale every imposed extent evenly.
-        let (mirror, _) = readyMirror(layout: reflow123)
+        // Set the container directly: this test is about the RE-IMPOSITION a
+        // container change drives, not the input-resolution path. The reading
+        // path (clamp to window, or defer a pre-window reading) is covered by
+        // the fresh-connect-wedge tests above; routing this through
+        // noteContainerSize on a windowless test mirror would only trip that
+        // guard — a no-window resize cannot happen for a visible mirror in the
+        // real app, where a resize always carries a window.
+        let (mirror, _) = makeMirror(layout: reflow123, geometry: calibratedGeometry)
         mirror.isVisibleForSizing = true
+        mirror.containerSizePt = CGSize(width: 800, height: 620)
+        mirror.containerScale = 2
         mirror.reconcile(layout: reflow123)
         // Triggers only schedule; the coalesced pass does the work.
         mirror.performSizingPassNow()
         let before = Self.imposedExtents(of: mirror.bonsplitController.treeSnapshot())
         #expect(!before.isEmpty, "the sizing pass must impose exact extents")
         // Shrink far below the layout's ideal width: extents must rescale.
-        mirror.noteContainerSize(pointSize: CGSize(width: 400, height: 620), scale: 2)
+        mirror.containerSizePt = CGSize(width: 400, height: 620)
         mirror.performSizingPassNow()
         let after = Self.imposedExtents(of: mirror.bonsplitController.treeSnapshot())
         #expect(Set(before.keys) == Set(after.keys))
@@ -387,6 +456,45 @@ import Testing
         ))
         #expect(mirror.zoomed == false)
         #expect(mirror.visibleLayout == nil)
+    }
+
+    // MARK: render ownership: divider drag sessions
+
+    /// Mid-drag the user owns divider geometry: a sizing pass firing while a
+    /// drag session is live must hold — not claim, not impose — and the
+    /// session end (the deterministic mouseUp signal, delivered through the
+    /// controller delegate) must consume the deferral and re-arm the pass.
+    @Test func sizingPassDefersMidDragAndSessionEndConsumesTheDeferral() {
+        let (mirror, connection) = readyMirror(layout: reflow123)
+        mirror.isVisibleForSizing = true
+        mirror.performSizingPassNow()
+        #expect(pushed(connection) != nil)
+
+        mirror.bonsplitController.noteDividerDragSession(true)
+        #expect(mirror.bonsplitController.isDividerDragActive)
+        mirror.setNeedsSizingPassIgnoringInputs() // views no longer hold the plan
+        mirror.performSizingPassNow()
+        #expect(mirror.sizingPassDeferredForDrag, "a pass firing mid-drag must hold")
+
+        mirror.bonsplitController.noteDividerDragSession(false)
+        #expect(!mirror.bonsplitController.isDividerDragActive)
+        #expect(!mirror.sizingPassDeferredForDrag, "session end must consume the deferral")
+    }
+
+    /// The session counter is authoritative and survives imbalance: an
+    /// unmatched end clamps at zero instead of going negative, so the next
+    /// begin still reads as an active drag.
+    @Test func dividerDragSessionCounterClampsAtZero() {
+        let controller = BonsplitController()
+        #expect(!controller.isDividerDragActive)
+        controller.noteDividerDragSession(true)
+        #expect(controller.isDividerDragActive)
+        controller.noteDividerDragSession(false)
+        controller.noteDividerDragSession(false) // unmatched end
+        #expect(!controller.isDividerDragActive)
+        controller.noteDividerDragSession(true)
+        #expect(controller.isDividerDragActive, "a clamped counter must not absorb the next begin")
+        controller.noteDividerDragSession(false)
     }
 
 }

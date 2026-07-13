@@ -326,6 +326,37 @@ final class RemoteTmuxWindowMirror: RemoteTmuxControlPaneMutationOwner {
     /// scaling stale fractions proportionally, and a lopsided split can
     /// lose more than the pane slack and wrap. The old ideal-over-ideal
     /// fractions were container-independent, so no trigger existed here.
+    /// An NSView planted inside the mirror's own view subtree (not the portal
+    /// layer), so `hostProbeView?.window` is the hosting window even while
+    /// portal-hosted panels churn, and its superview chain is the real
+    /// ancestor stack that produced the SwiftUI proposal.
+    weak var hostProbeView: NSView?
+
+#if DEBUG
+    /// The per-pane outer sizes the last imposition granted — the plan side
+    /// of the chrome-parity probe in ``handleSizingSample``.
+    @ObservationIgnored var lastPlannedOuterSizes: [Int: CGSize] = [:]
+
+    private func dumpProposalAncestors(proposedWidth: CGFloat, boundWidth: CGFloat?) {
+        guard let probe = hostProbeView else {
+            cmuxDebugLog("mirror.container.ancestors @\(windowId) NO-PROBE proposed=\(Int(proposedWidth))")
+            return
+        }
+        var chain: [String] = []
+        var current: NSView? = probe
+        var depth = 0
+        while let view = current, depth < 14 {
+            let name = String(NSStringFromClass(type(of: view)).prefix(48))
+            chain.append("\(name)=\(Int(view.frame.width))")
+            current = view.superview
+            depth += 1
+        }
+        cmuxDebugLog(
+            "mirror.container.ancestors @\(windowId) proposed=\(Int(proposedWidth)) bound=\(boundWidth.map { String(Int($0)) } ?? "nil") \(chain.joined(separator: " < "))"
+        )
+    }
+#endif
+
     func noteContainerSize(pointSize: CGSize, scale: CGFloat) {
         // Hidden tabs keep their last visible geometry. A hidden tab's
         // portal-hosted views have no window clamping them, so their
@@ -337,65 +368,92 @@ final class RemoteTmuxWindowMirror: RemoteTmuxControlPaneMutationOwner {
         // its attach-time size so the initial claim can keep tmux off its
         // 80×24 default.
         guard isVisibleForSizing || containerSizePt == nil else { return }
-        // A first measurement is only worth recording if it is usable: a
-        // hidden mount can report 0x0 or 1x1 first, and recording that
-        // would consume the one unvalidated slot the initial claim needs —
-        // blocking every later measurement while the window sits unclaimed.
-        if containerSizePt == nil, !isVisibleForSizing,
-           pointSize.width <= 1 || pointSize.height <= 1 {
-            return
-        }
         // A mirror's container cannot exceed the content area of the window
-        // hosting it — that is a physical invariant, not a heuristic.
-        // SwiftUI can hand this callback a content-derived size when some
-        // ancestor briefly adopts a layout ideal (seen at fresh connect
-        // with a starved pane: the container read the full DISPLAY width
-        // while the app window was a third of it, so the claim spiked to
-        // the display ceiling and tmux — correctly sizing to the real
-        // window — never matched it, wedging forever). Clamp to the hosting
-        // window's content width when a visible window holds the panes; a
-        // parked or not-yet-windowed mirror has no tighter truth than the
-        // largest display, so fall back to that.
-        var pointSize = pointSize
-        let windowContent = panelsByPaneId.values.first?.hostedView.window
+        // hosting it. SwiftUI can hand this callback a content-derived size
+        // when some ancestor briefly adopts a layout ideal at fresh connect
+        // (the container read the full DISPLAY width while the app window was
+        // a third of it). The decision — clamp to the window, defer a
+        // pre-window reading, or fall back to a display ceiling — is a pure
+        // function so the fresh-connect wedge is unit-tested, not left to the
+        // live view (see docs/remote-tmux-sizing-design.md).
+        let windowBound = (hostProbeView?.window ?? panelsByPaneId.values.first?.hostedView.window)
             .flatMap { $0.isVisible ? $0.contentLayoutRect.size : nil }
-        if let bound = windowContent, bound.width > 1, bound.height > 1 {
-            pointSize.width = min(pointSize.width, bound.width)
-            pointSize.height = min(pointSize.height, bound.height)
-        } else if containerSizePt != nil {
-            // No visible hosting window to bound this reading against. During
-            // fresh connect the first geometry callback can arrive while the
-            // window is still ordering in, carrying a stale full-display
-            // width; banking it claims the display ceiling and tmux — sized
-            // to the real window — never matches, wedging until something
-            // else nudges a re-measure. Once a size is on record, defer to
-            // the next callback that has a visible window rather than record
-            // an unvalidated one. (The first-ever measurement still falls
-            // through below, clamped to the display, so an attach that never
-            // has a window yet is not starved of its initial claim.)
-            return
-        } else {
-            let widths = NSScreen.screens.map(\.visibleFrame.width)
-            let heights = NSScreen.screens.map(\.visibleFrame.height)
-            if let maxW = widths.max(), let maxH = heights.max(), maxW > 1, maxH > 1 {
-                pointSize.width = min(pointSize.width, maxW)
-                pointSize.height = min(pointSize.height, maxH)
-            }
-        }
-        #if DEBUG
-        if pointSize.width > 3000 || pointSize.height > 3000 {
-            let window = panelsByPaneId.values.first?.hostedView.window
+        let resolved = Self.resolveContainerReading(
+            proposed: pointSize,
+            current: containerSizePt,
+            windowBound: windowBound,
+            displayBound: Self.largestDisplaySize(),
+            isVisible: isVisibleForSizing
+        )
+#if DEBUG
+        // Log only the interesting decisions — a drop, a clamp, or the first
+        // bank. Routine re-banks fire per geometry tick during live resize,
+        // and per-tick log I/O is itself enough to drag on the resize.
+        let interesting = resolved == nil || resolved != pointSize || containerSizePt == nil
+        if interesting {
             cmuxDebugLog(
-                "remote.container.record @\(windowId)"
-                    + " size=\(Int(pointSize.width))x\(Int(pointSize.height))"
-                    + " panels=\(panelsByPaneId.count)"
-                    + " win=\(window.map { "\(Int($0.contentLayoutRect.width))x\(Int($0.contentLayoutRect.height)) vis=\($0.isVisible ? 1 : 0) cls=\(String(describing: type(of: $0)))" } ?? "nil")"
+                "mirror.container.note @\(windowId) proposed=\(Int(pointSize.width))x\(Int(pointSize.height)) current=\(containerSizePt.map { "\(Int($0.width))x\(Int($0.height))" } ?? "nil") bound=\(windowBound.map { "\(Int($0.width))x\(Int($0.height))" } ?? "nil") vis=\(isVisibleForSizing ? 1 : 0) -> \(resolved.map { "bank \(Int($0.width))x\(Int($0.height))" } ?? "drop")"
             )
         }
-        #endif
+        // The one anomaly worth a full ancestor dump: a proposal wider than
+        // the hosting window means some ancestor adopted a content ideal —
+        // the residual unknown the clamp contains but does not cure.
+        if let bound = windowBound, pointSize.width > bound.width + 0.5 {
+            dumpProposalAncestors(proposedWidth: pointSize.width, boundWidth: bound.width)
+        }
+#endif
+        guard let pointSize = resolved else { return }
         containerSizePt = pointSize
         containerScale = scale
         setNeedsSizingPassAfterContainerQuiesces()
+    }
+
+    /// The largest display's visible size, or nil if none — the coarse ceiling
+    /// for a reading taken before any window bounds it.
+    static func largestDisplaySize() -> CGSize? {
+        guard let w = NSScreen.screens.map(\.visibleFrame.width).max(),
+              let h = NSScreen.screens.map(\.visibleFrame.height).max(),
+              w > 1, h > 1 else { return nil }
+        return CGSize(width: w, height: h)
+    }
+
+    /// Pure decision for what a container geometry callback banks as the claim
+    /// input, or nil to ignore it — no measured feedback, only the reading, the
+    /// current banked size, the visible window's content bound, the display
+    /// ceiling, and visibility. This is where the fresh-connect wedge is
+    /// prevented: a pre-window reading is deferred rather than banked, and a
+    /// real window clamps the reading to its content rect.
+    static func resolveContainerReading(
+        proposed: CGSize,
+        current: CGSize?,
+        windowBound: CGSize?,
+        displayBound: @autoclosure () -> CGSize?,
+        isVisible: Bool
+    ) -> CGSize? {
+        // A degenerate first reading on a hidden mount would consume the one
+        // unvalidated slot the initial claim needs.
+        if current == nil, !isVisible, proposed.width <= 1 || proposed.height <= 1 {
+            return nil
+        }
+        // A visible hosting window is the authoritative bound: clamp to it.
+        if let bound = windowBound, bound.width > 1, bound.height > 1 {
+            return CGSize(
+                width: min(proposed.width, bound.width),
+                height: min(proposed.height, bound.height)
+            )
+        }
+        // No visible window, but a size is already on record: defer rather than
+        // bank an unvalidated pre-window reading — the fresh-connect wedge.
+        if current != nil { return nil }
+        // First reading with no window yet: a display ceiling keeps an attach
+        // that has no window from banking an unbounded size.
+        if let display = displayBound(), display.width > 1, display.height > 1 {
+            return CGSize(
+                width: min(proposed.width, display.width),
+                height: min(proposed.height, display.height)
+            )
+        }
+        return proposed
     }
 
     /// Ingests one sizing sample into the min-tracked pad constants.
@@ -447,6 +505,14 @@ final class RemoteTmuxWindowMirror: RemoteTmuxControlPaneMutationOwner {
     }
 
     @ObservationIgnored private var sizingPassScheduled = false
+    /// Set when a sizing pass arrived while a divider drag session was live
+    /// and was held back; the drag-end callback consumes it.
+    @ObservationIgnored var sizingPassDeferredForDrag = false
+    /// The exact point size the split tree renders at (grid + chrome), set by
+    /// the sizing pass; the view frames the tree to this, top-leading, so the
+    /// region's sub-cell remainder stays outside the tree. nil until the
+    /// first sized pass (the view fills the region as before).
+    private(set) var renderFrameSize: CGSize?
     @ObservationIgnored private var lastCompletedSizingInputs: SizingInputs?
 
     private func currentSizingInputs() -> SizingInputs {
@@ -503,6 +569,15 @@ final class RemoteTmuxWindowMirror: RemoteTmuxControlPaneMutationOwner {
     /// retry budgets and no event dedup anywhere.
     func performSizingPassNow() {
         sizingPassScheduled = false
+        // While the user is dragging a divider, hold the pass. Imposing now
+        // would move the divider out from under the pointer and mark the
+        // dragged split as imposed again, so its resize-pane at drag end
+        // would be skipped (see the render-ownership section of the design
+        // doc). The drag-end delegate callback runs the held pass.
+        if bonsplitController.isDividerDragActive {
+            sizingPassDeferredForDrag = true
+            return
+        }
         // Re-clamp the stored container against the live hosting window
         // before reading inputs. A first measurement taken before the
         // window was visible (fresh connect) banks a display-width fallback
@@ -525,7 +600,23 @@ final class RemoteTmuxWindowMirror: RemoteTmuxControlPaneMutationOwner {
         lastCompletedSizingInputs = inputs
         _ = updateClientSize()
         if inputs.visible {
+            let frameBefore = renderFrameSize
+            updateRenderFrameSize()
             imposeDividerPlan()
+            // A changed render frame applies on the NEXT SwiftUI commit —
+            // after the impositions above — and AppKit's rescale then moves
+            // every divider off the extents just applied, with nothing left
+            // to put them back (inputs unchanged, container changed). Restate
+            // the plan once, two turns out, after the frame has landed. The
+            // follow-up pass sees the same render frame, so it cannot
+            // schedule another: one bounded echo, not a loop.
+            if renderFrameSize != frameBefore {
+                DispatchQueue.main.async {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.setNeedsSizingPassIgnoringInputs()
+                    }
+                }
+            }
             // The imposition applies to bonsplit on the NEXT runloop turn
             // (coalesced), so the anchors move after this pass returns. The
             // portal syncs its hosted views from AppKit's async geometry
@@ -547,6 +638,43 @@ final class RemoteTmuxWindowMirror: RemoteTmuxControlPaneMutationOwner {
         }
     }
 
+    /// The point size the split tree renders at: the tmux grid it holds plus
+    /// its chrome — not the whole region. The region is rarely an exact
+    /// multiple of the cell grid; the sub-cell remainder (up to one cell per
+    /// axis) must stay OUTSIDE the tree as trailing margin, because inside it
+    /// would land in some pane along a split axis and floor to an extra row
+    /// or column there. Same answer tmux gives a too-big client: a border.
+    /// Inputs are the region, the metrics, and tmux's tree — nothing measured
+    /// from rendering — so this cannot feed back.
+    private func updateRenderFrameSize() {
+        guard let container = containerSizePt,
+              let metrics = nativeLayoutMetrics(),
+              renderedLayout.width > 0, renderedLayout.height > 0 else {
+            if renderFrameSize != nil { renderFrameSize = nil }
+            return
+        }
+        let residual = metrics.residual(of: renderedLayout)
+        let exact = CGSize(
+            width: CGFloat(renderedLayout.width) * metrics.cellSize.width + residual.width,
+            height: CGFloat(renderedLayout.height) * metrics.cellSize.height + residual.height
+        )
+        let clamped = CGSize(
+            width: min(exact.width, container.width),
+            height: min(exact.height, container.height)
+        )
+        if renderFrameSize != clamped {
+            renderFrameSize = clamped
+            #if DEBUG
+            cmuxDebugLog(
+                "mirror.renderFrame @\(windowId) grid=\(renderedLayout.width)x\(renderedLayout.height)"
+                    + " exact=\(Int(exact.width))x\(Int(exact.height))"
+                    + " region=\(Int(container.width))x\(Int(container.height))"
+                    + " -> \(Int(clamped.width))x\(Int(clamped.height))"
+            )
+            #endif
+        }
+    }
+
     /// Marks the mirror unsettled so the next pass runs even with identical
     /// inputs — for triggers that replace the bonsplit tree itself (rebuilds,
     /// structural edits, tab re-shows): fresh split views do not hold the
@@ -555,33 +683,6 @@ final class RemoteTmuxWindowMirror: RemoteTmuxControlPaneMutationOwner {
         lastCompletedSizingInputs = nil
         setNeedsSizingPass()
     }
-
-    #if DEBUG
-    /// One-shot per window: at container-suspect time, walk from a pane's
-    /// view to the window logging each ancestor's class and width. The
-    /// FIRST ancestor wider than the window names the view whose sizing
-    /// rule still adopts a content-derived ideal.
-    private static var dumpedAncestorChains = Set<Int>()
-    func debugDumpAncestorWidths() {
-        guard !Self.dumpedAncestorChains.contains(windowId),
-              let view = panelsByPaneId.values.first?.hostedView else { return }
-        Self.dumpedAncestorChains.insert(windowId)
-        let windowWidth = view.window?.contentLayoutRect.width ?? -1
-        var node: NSView? = view
-        var depth = 0
-        while let current = node, depth < 60 {
-            let width = Int(current.frame.width)
-            let marker = CGFloat(width) > windowWidth + 1 ? " OVERSIZED" : ""
-            cmuxDebugLog(
-                "remote.container.chain @\(windowId) [\(depth)]"
-                    + " \(String(describing: type(of: current))) w=\(width)\(marker)"
-            )
-            node = current.superview
-            depth += 1
-        }
-        cmuxDebugLog("remote.container.chain @\(windowId) window=\(Int(windowWidth))")
-    }
-    #endif
 
     private func handleSizingSample(_ sample: TerminalSurfaceRawSizingSample, paneId: Int) {
         ingest(sample: sample)
@@ -598,6 +699,31 @@ final class RemoteTmuxWindowMirror: RemoteTmuxControlPaneMutationOwner {
                     + " rendered=\(sample.columns)x\(sample.rows)"
                     + " assigned=\(leaf.width)x\(leaf.height)"
             )
+            // Chrome parity: the same shared points→cells model the tests
+            // use, applied to the extent the plan granted this pane. If the
+            // plan's expectation ALSO disagrees with what the surface
+            // sampled, the chrome model and the painted chrome have drifted
+            // — the drift class that otherwise rots silently.
+            if let planned = lastPlannedOuterSizes[paneId],
+               let metrics = nativeLayoutMetrics(),
+               let geometry = currentGeometry() {
+                let expected = RemoteTmuxNativeLayoutMetrics.renderedCells(
+                    outer: planned,
+                    tabBarHeight: metrics.tabBarHeight,
+                    paneTitleRowHeight: metrics.paneTitleRowHeight,
+                    scale: geometry.scale,
+                    surfacePadPx: (width: geometry.surfacePadWidthPx, height: geometry.surfacePadHeightPx),
+                    cellPx: (width: geometry.cellWidthPx, height: geometry.cellHeightPx)
+                )
+                if sample.columns != expected.columns || sample.rows != expected.rows {
+                    cmuxDebugLog(
+                        "remote.parity.mismatch @\(windowId) pane=%\(paneId)"
+                            + " sampled=\(sample.columns)x\(sample.rows)"
+                            + " expectedFromPlan=\(expected.columns)x\(expected.rows)"
+                            + " planned=\(Int(planned.width))x\(Int(planned.height))pt"
+                    )
+                }
+            }
         }
         #endif
         setNeedsSizingPass()

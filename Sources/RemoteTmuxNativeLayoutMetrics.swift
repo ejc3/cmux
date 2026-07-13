@@ -25,6 +25,32 @@ struct RemoteTmuxNativeLayoutMetrics: Equatable, Sendable {
     /// and compound across cross-axis nesting levels.
     static let paneQuantizationSlack: CGFloat = 1
 
+    /// The grid a pane's outer point size renders to, in the shipping
+    /// surface's own arithmetic: the portal floors points→pixels exactly like
+    /// `TerminalSurface.pixelDimension`, and ghostty floors the padded pixel
+    /// budget to whole cells. Both steps FLOOR — rounding would credit a cell
+    /// the surface cannot paint (a scaled size landing in [B−0.5, B) would
+    /// pass a rounded model while wrapping on the real surface). This is the
+    /// ONE source for points→cells: the sizing tests and the DEBUG
+    /// chrome-parity check both call it, so the two cannot drift.
+    static func renderedCells(
+        outer: CGSize,
+        tabBarHeight: CGFloat,
+        paneTitleRowHeight: CGFloat,
+        scale: CGFloat,
+        surfacePadPx: (width: Int, height: Int),
+        cellPx: (width: Int, height: Int)
+    ) -> (columns: Int, rows: Int) {
+        let widthPx = Int((outer.width * scale).rounded(.down))
+        let surfaceHeightPx = Int(
+            ((outer.height - tabBarHeight - paneTitleRowHeight) * scale).rounded(.down)
+        )
+        return (
+            columns: (widthPx - surfacePadPx.width) / cellPx.width,
+            rows: (surfaceHeightPx - surfacePadPx.height) / cellPx.height
+        )
+    }
+
     func clientGrid(
         layout: RemoteTmuxLayoutNode,
         contentSize: CGSize
@@ -65,12 +91,21 @@ struct RemoteTmuxNativeLayoutMetrics: Equatable, Sendable {
             )
         case .vertical(let children):
             let childResiduals = children.map(residual(of:))
+            // With pane title rows on, tmux has NO separator row between
+            // stacked panes — the lower pane's title row IS the border
+            // (measured on tmux 3.7: an 80x30 window with three even panes
+            // is 10+1+9+1+9 without titles, and (1+9)x3 with them). Each
+            // title is already charged per pane above; crediting a
+            // separator cell per gap on top of that double-counts, leaving
+            // the fold a cell short per gap. The native divider still
+            // spends its points either way.
+            let separatorCell = paneTitleRowHeight > 0 ? 0 : cellSize.height
             return CGSize(
                 width: childResiduals.map(\.width).max() ?? 0,
                 height: childResiduals.reduce(0) { $0 + $1.height }
                     + separatorResidual(
                         count: children.count,
-                        cellExtent: cellSize.height
+                        cellExtent: separatorCell
                     )
             )
         }
