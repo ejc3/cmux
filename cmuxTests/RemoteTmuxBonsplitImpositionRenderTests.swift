@@ -102,6 +102,62 @@ import Testing
         )
     }
 
+    /// The live fuzz found panes rendering at a fraction of their planned
+    /// extents, and the ancestor tripwire traced it to SwiftUI content laid
+    /// out thousands of points wider than its correctly-pinned hosting view
+    /// in the workspace pane chain — growing as the fuzz opened more tabs.
+    /// This pins the suspected mechanism at the desk: a pane with MANY tabs
+    /// must keep its whole hosted view tree within the window's width. If
+    /// any subview (the tab strip is the suspect) overflows the proposal,
+    /// every space-filling sibling below inherits the inflated width.
+    @Test func manyTabsDoNotInflateThePaneBeyondItsWindow() throws {
+        let controller = BonsplitController(configuration: BonsplitConfiguration().remoteTmuxEmbedded)
+        let rootPane = try #require(controller.allPaneIds.first)
+        for i in 0..<30 {
+            _ = controller.createTab(
+                title: "tab-with-a-longish-title-\(i)", icon: "terminal",
+                kind: "terminal", inPane: rootPane
+            )
+        }
+        let hostingView = NSHostingView(
+            rootView: BonsplitView(controller: controller) { _, _ in Color.clear }
+                emptyPane: { _ in Color.clear }
+        )
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .closable], backing: .buffered, defer: false
+        )
+        let contentView = try #require(window.contentView)
+        hostingView.frame = contentView.bounds
+        hostingView.autoresizingMask = [.width, .height]
+        contentView.addSubview(hostingView)
+        window.makeKeyAndOrderFront(nil)
+        for _ in 0..<10 {
+            contentView.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        defer { window.orderOut(nil) }
+
+        // Scroll documents are legitimately wider than the window — the tab
+        // row lives in a horizontal ScrollView and its content is clipped by
+        // the viewport. The leak the fuzz caught is width OUTSIDE any clip:
+        // the hosting view's root graphics view inflating, which no viewport
+        // contains and which every space-filling sibling then fills.
+        var widest: (CGFloat, String) = (0, "none")
+        func walk(_ view: NSView) {
+            if view is NSClipView { return }
+            if view.frame.width > widest.0 {
+                widest = (view.frame.width, NSStringFromClass(type(of: view)))
+            }
+            for sub in view.subviews { walk(sub) }
+        }
+        walk(hostingView)
+        #expect(
+            widest.0 <= 401,
+            "an unclipped hosted view inflated past the 400pt window: \(widest.1) at \(widest.0)pt — space-filling siblings inherit this width"
+        )
+    }
+
     /// Render ownership against the real renderer: a container change under a
     /// held imposition must NOT be fought. Bonsplit used to re-assert the old
     /// extent from its resize callback (inside the very layout pass that moved

@@ -354,6 +354,25 @@ final class RemoteTmuxWindowMirror: RemoteTmuxControlPaneMutationOwner {
         cmuxDebugLog(
             "mirror.container.ancestors @\(windowId) proposed=\(Int(proposedWidth)) bound=\(boundWidth.map { String(Int($0)) } ?? "nil") \(chain.joined(separator: " < "))"
         )
+        // Name the inflated SUBTREE, not just the ancestor line: at each
+        // ancestor whose width exceeds the bound, list its direct children —
+        // the child that carries the width at the level where the parent is
+        // still sane is the leak. Scroll documents are exempt (clipped).
+        guard let bound = boundWidth else { return }
+        current = probe.superview
+        depth = 0
+        while let view = current, depth < 14 {
+            if view.frame.width > bound + 0.5, !(view.superview is NSClipView) {
+                let kids = view.subviews.prefix(8).map {
+                    "\(String(NSStringFromClass(type(of: $0)).suffix(28)))=\(Int($0.frame.width))"
+                }.joined(separator: " ")
+                cmuxDebugLog(
+                    "mirror.container.kids @\(windowId) level=\(depth) \(String(NSStringFromClass(type(of: view)).suffix(28)))=\(Int(view.frame.width)) kids[\(kids)]"
+                )
+            }
+            current = view.superview
+            depth += 1
+        }
     }
 #endif
 
@@ -435,8 +454,21 @@ final class RemoteTmuxWindowMirror: RemoteTmuxControlPaneMutationOwner {
         if current == nil, !isVisible, proposed.width <= 1 || proposed.height <= 1 {
             return nil
         }
-        // A visible hosting window is the authoritative bound: clamp to it.
+        // A visible hosting window is the authoritative bound. A reading
+        // WITHIN it banks as-is. A reading BEYOND it is pathological — the
+        // mirror's region can never exceed the window's content area, so an
+        // oversized proposal means some ancestor adopted a content ideal,
+        // and it carries no information about the true slot. Clamping it to
+        // the bound used to bank the bound itself, which overstates the
+        // region by however much chrome sits between window and mirror —
+        // the live fuzz measured the resulting plans running ~30-40pt wide
+        // at rest. Defer instead and keep the last good reading; only a
+        // first-ever reading clamps, so the initial claim still exists.
         if let bound = windowBound, bound.width > 1, bound.height > 1 {
+            if proposed.width <= bound.width + 0.5, proposed.height <= bound.height + 0.5 {
+                return proposed
+            }
+            if current != nil { return nil }
             return CGSize(
                 width: min(proposed.width, bound.width),
                 height: min(proposed.height, bound.height)

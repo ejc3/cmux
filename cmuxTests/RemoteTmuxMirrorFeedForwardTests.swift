@@ -105,13 +105,39 @@ import Testing
         )
     }
 
-    /// Once a real window bounds the reading, it clamps to the window's content
-    /// rect — this is how a slightly-early banked size heals.
-    @Test func visibleWindowClampsAndHealsTheReading() {
+    /// With a real window bounding the reading: a sane (within-bound) reading
+    /// banks as-is; an OVERSIZED one is an ancestor's content ideal, says
+    /// nothing about the true slot, and must be DEFERRED — banking the bound
+    /// itself overstated the region by the window-to-mirror chrome and the
+    /// live fuzz measured plans running ~40pt wide at rest. Only a first-ever
+    /// reading clamps, so the initial claim still exists.
+    @Test func visibleWindowBanksSaneReadingsAndDefersOversizedOnes() {
+        // Sane reading within the bound: banked verbatim.
+        #expect(
+            RemoteTmuxWindowMirror.resolveContainerReading(
+                proposed: CGSize(width: 1100, height: 700),
+                current: CGSize(width: 800, height: 600),
+                windowBound: CGSize(width: 1200, height: 800),
+                displayBound: nil,
+                isVisible: true
+            ) == CGSize(width: 1100, height: 700)
+        )
+        // Oversized with a good reading on record: deferred, not clamped.
         #expect(
             RemoteTmuxWindowMirror.resolveContainerReading(
                 proposed: CGSize(width: 3000, height: 2000),
                 current: CGSize(width: 800, height: 600),
+                windowBound: CGSize(width: 1200, height: 800),
+                displayBound: nil,
+                isVisible: true
+            ) == nil
+        )
+        // Oversized FIRST reading: clamped to the bound so the initial claim
+        // can still be made.
+        #expect(
+            RemoteTmuxWindowMirror.resolveContainerReading(
+                proposed: CGSize(width: 3000, height: 2000),
+                current: nil,
                 windowBound: CGSize(width: 1200, height: 800),
                 displayBound: nil,
                 isVisible: true
