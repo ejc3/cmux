@@ -30,7 +30,7 @@ public enum ControlCommandExecutionPolicy: Sendable, Equatable {
     public init(forMethod method: String) {
 #if DEBUG
         if method == "remote.tmux.test_exec" || method == "remote.tmux.test_set_frame"
-            || method == "remote.tmux.sizing_settled" {
+            || method == "remote.tmux.sizing_settled" || method == "remote.tmux.window" {
             self = .socketWorker(mainThreadCallable: false)
             return
         }
@@ -128,7 +128,7 @@ public enum ControlCommandExecutionPolicy: Sendable, Equatable {
         "remote.tmux.attach",
         "remote.tmux.detach",
         "remote.tmux.state",
-        "remote.tmux.mirror", "remote.tmux.window", "remote.tmux.pane_grids",
+        "remote.tmux.mirror", "remote.tmux.pane_grids",
         "sidebar.custom.validate",
         "sidebar.custom.reload",
         "sidebar.custom.select",
