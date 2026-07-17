@@ -155975,115 +155975,115 @@
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "ينطبق على نقرات الروابط في الطرفية واستدعاءات `open https://...` المعترضة. قاعدة واحدة لكل سطر. النص العادي يطابق أي جزء من URL، أو ابدأ بـ `re:` للتعبيرات النمطية (مثال: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "ينطبق أينما يفتح cmux رابطًا — نقرات الروابط في الطرفية، واستدعاءات `open https://...` المعترضة، والروابط داخل المتصفح المضمّن، وروابط الشريط الجانبي. قاعدة واحدة لكل سطر. النص العادي يطابق أي جزء من URL، أو ابدأ بـ `re:` للتعبيرات النمطية (مثال: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "bs": {
           "stringUnit": {
             "state": "translated",
-            "value": "Primjenjuje se na klikove linkova u terminalu i presretnute `open https://...` pozive. Jedno pravilo po redu. Običan tekst odgovara bilo kojem dijelu URL-a, ili dodajte prefiks `re:` za regex (na primjer: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "Primjenjuje se gdje god cmux otvara link — klikovi linkova u terminalu, presretnuti `open https://...` pozivi, linkovi unutar ugrađenog preglednika i linkovi u bočnoj traci. Jedno pravilo po redu. Običan tekst odgovara bilo kojem dijelu URL-a, ili dodajte prefiks `re:` za regex (na primjer: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "da": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gælder for terminallinksklik og opfangede `open https://...`-kald. Én regel pr. linje. Almindelig tekst matcher enhver URL-delstreng, eller brug `re:` som præfiks for regex (f.eks.: openai.com/usage, re:^https?://[^/]*\\.example\\.com/(billing|usage))."
+            "value": "Gælder overalt hvor cmux åbner et link — terminallinksklik, opfangede `open https://...`-kald, links i den indlejrede browser og links i sidepanelet. Én regel pr. linje. Almindelig tekst matcher enhver URL-delstreng, eller brug `re:` som præfiks for regex (f.eks.: openai.com/usage, re:^https?://[^/]*\\.example\\.com/(billing|usage))."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gilt für Klicks auf Terminal-Links und abgefangene `open https://...`-Aufrufe. Eine Regel pro Zeile. Klartext stimmt mit jedem URL-Teilstring überein, oder verwenden Sie das Präfix `re:` für Regex (zum Beispiel: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "Gilt überall, wo cmux einen Link öffnet — Klicks auf Terminal-Links, abgefangene `open https://...`-Aufrufe, Links im eingebetteten Browser und Links in der Seitenleiste. Eine Regel pro Zeile. Klartext stimmt mit jedem URL-Teilstring überein, oder verwenden Sie das Präfix `re:` für Regex (zum Beispiel: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Applies to terminal link clicks and intercepted `open https://...` calls. One rule per line. Plain text matches any URL substring, or prefix with `re:` for regex (for example: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "Applies wherever cmux opens a link — terminal link clicks, intercepted `open https://...` calls, links inside the embedded browser, and sidebar links. One rule per line. Plain text matches any URL substring, or prefix with `re:` for regex (for example: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "Se aplica a clics en enlaces del terminal y llamadas interceptadas de `open https://...`. Una regla por línea. El texto plano coincide con cualquier subcadena de URL, o usa el prefijo `re:` para regex (por ejemplo: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "Se aplica dondequiera que cmux abra un enlace: clics en enlaces del terminal, llamadas interceptadas de `open https://...`, enlaces dentro del navegador integrado y enlaces de la barra lateral. Una regla por línea. El texto plano coincide con cualquier subcadena de URL, o usa el prefijo `re:` para regex (por ejemplo: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "S'applique aux clics sur les liens du terminal et aux appels `open https://...` interceptés. Une règle par ligne. Le texte brut correspond à toute sous-chaîne d'URL, ou préfixez par `re:` pour une expression régulière (par exemple : openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "S'applique partout où cmux ouvre un lien — clics sur les liens du terminal, appels `open https://...` interceptés, liens dans le navigateur intégré et liens de la barre latérale. Une règle par ligne. Le texte brut correspond à toute sous-chaîne d'URL, ou préfixez par `re:` pour une expression régulière (par exemple : openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "it": {
           "stringUnit": {
             "state": "translated",
-            "value": "Si applica ai clic sui link nel terminale e alle chiamate intercettate `open https://...`. Una regola per riga. Il testo semplice corrisponde a qualsiasi sottostringa dell'URL, oppure usa il prefisso `re:` per le regex (ad esempio: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "Si applica ovunque cmux apra un link: clic sui link nel terminale, chiamate intercettate `open https://...`, link nel browser integrato e link della barra laterale. Una regola per riga. Il testo semplice corrisponde a qualsiasi sottostringa dell'URL, oppure usa il prefisso `re:` per le regex (ad esempio: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ターミナルのリンククリックおよびインターセプトされた`open https://...`呼び出しに適用されます。1行に1ルール。プレーンテキストはURL部分文字列に一致し、`re:`プレフィックスで正規表現を使用できます（例: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage)）。"
+            "value": "cmuxがリンクを開くすべての場所（ターミナルのリンククリック、インターセプトされた`open https://...`呼び出し、組み込みブラウザ内のリンク、サイドバーのリンク）に適用されます。1行に1ルール。プレーンテキストはURL部分文字列に一致し、`re:`プレフィックスで正規表現を使用できます（例: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage)）。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "터미널 링크 클릭 및 인터셉트된 `open https://...` 호출에 적용됩니다. 한 줄에 하나의 규칙. 일반 텍스트는 URL의 하위 문자열을 일치시키며, `re:` 접두사로 정규식을 사용할 수 있습니다 (예: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "cmux가 링크를 여는 모든 곳(터미널 링크 클릭, 인터셉트된 `open https://...` 호출, 내장 브라우저 내부 링크, 사이드바 링크)에 적용됩니다. 한 줄에 하나의 규칙. 일반 텍스트는 URL의 하위 문자열을 일치시키며, `re:` 접두사로 정규식을 사용할 수 있습니다 (예: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "nb": {
           "stringUnit": {
             "state": "translated",
-            "value": "Gjelder for terminallenkeklikk og avlyttede `open https://...`-kall. Én regel per linje. Ren tekst matcher enhver del av URL-en, eller prefiks med `re:` for regulære uttrykk (for eksempel: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "Gjelder overalt der cmux åpner en lenke — terminallenkeklikk, avlyttede `open https://...`-kall, lenker i den innebygde nettleseren og lenker i sidefeltet. Én regel per linje. Ren tekst matcher enhver del av URL-en, eller prefiks med `re:` for regulære uttrykk (for eksempel: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "pl": {
           "stringUnit": {
             "state": "translated",
-            "value": "Dotyczy kliknięć linków w terminalu i przechwyconych wywołań `open https://...`. Jedna reguła na wiersz. Zwykły tekst dopasowuje dowolny fragment URL, lub użyj prefiksu `re:` dla wyrażeń regularnych (na przykład: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "Dotyczy każdego miejsca, w którym cmux otwiera link — kliknięć linków w terminalu, przechwyconych wywołań `open https://...`, linków we wbudowanej przeglądarce i linków na pasku bocznym. Jedna reguła na wiersz. Zwykły tekst dopasowuje dowolny fragment URL, lub użyj prefiksu `re:` dla wyrażeń regularnych (na przykład: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Aplica-se a cliques em links do terminal e chamadas interceptadas de `open https://...`. Uma regra por linha. Texto simples corresponde a qualquer substring de URL, ou prefixe com `re:` para regex (por exemplo: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "Aplica-se onde quer que o cmux abra um link — cliques em links do terminal, chamadas interceptadas de `open https://...`, links dentro do navegador integrado e links da barra lateral. Uma regra por linha. Texto simples corresponde a qualquer substring de URL, ou prefixe com `re:` para regex (por exemplo: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "ru": {
           "stringUnit": {
             "state": "translated",
-            "value": "Применяется к нажатиям на ссылки в терминале и перехваченным вызовам `open https://...`. Одно правило на строку. Обычный текст совпадает с любой подстрокой URL, или используйте префикс `re:` для регулярных выражений (например: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "Применяется везде, где cmux открывает ссылку — нажатия на ссылки в терминале, перехваченные вызовы `open https://...`, ссылки во встроенном браузере и ссылки в боковой панели. Одно правило на строку. Обычный текст совпадает с любой подстрокой URL, или используйте префикс `re:` для регулярных выражений (например: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "th": {
           "stringUnit": {
             "state": "translated",
-            "value": "ใช้กับการคลิกลิงก์ในเทอร์มินัลและการดักจับคำสั่ง `open https://...` กฎหนึ่งข้อต่อบรรทัด ข้อความธรรมดาจะจับคู่กับส่วนใดก็ได้ของ URL หรือนำหน้าด้วย `re:` สำหรับ regex (ตัวอย่าง: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))"
+            "value": "ใช้ทุกที่ที่ cmux เปิดลิงก์ — การคลิกลิงก์ในเทอร์มินัล การดักจับคำสั่ง `open https://...` ลิงก์ภายในเบราว์เซอร์ในตัว และลิงก์ในแถบด้านข้าง กฎหนึ่งข้อต่อบรรทัด ข้อความธรรมดาจะจับคู่กับส่วนใดก็ได้ของ URL หรือนำหน้าด้วย `re:` สำหรับ regex (ตัวอย่าง: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))"
           }
         },
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Terminal bağlantı tıklamalarına ve yakalanan `open https://...` çağrılarına uygulanır. Satır başına bir kural. Düz metin herhangi bir URL alt dizesiyle eşleşir veya regex için `re:` ön ekini kullanın (örneğin: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
+            "value": "cmux'un bağlantı açtığı her yerde geçerlidir — terminal bağlantı tıklamaları, yakalanan `open https://...` çağrıları, gömülü tarayıcıdaki bağlantılar ve kenar çubuğu bağlantıları. Satır başına bir kural. Düz metin herhangi bir URL alt dizesiyle eşleşir veya regex için `re:` ön ekini kullanın (örneğin: openai.com/usage, re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage))."
           }
         },
         "uk": {
           "stringUnit": {
             "state": "translated",
-            "value": "Застосовується до кліків на посилання в терміналі та перехоплених викликів `open https://...`. Одне правило на рядок. Звичайний текст збігається з будь-якою частиною URL, або додайте префікс `re:` для регулярного виразу (наприклад: openai.com/usage, re:^https?://[^/]*\\.example\\.com/(billing|usage))."
+            "value": "Застосовується всюди, де cmux відкриває посилання — кліки на посилання в терміналі, перехоплені виклики `open https://...`, посилання у вбудованому браузері та посилання на бічній панелі. Одне правило на рядок. Звичайний текст збігається з будь-якою частиною URL, або додайте префікс `re:` для регулярного виразу (наприклад: openai.com/usage, re:^https?://[^/]*\\.example\\.com/(billing|usage))."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "适用于终端中的链接点击和拦截的 `open https://...` 调用。每行一条规则。纯文本匹配任意 URL 子串，或使用 `re:` 前缀表示正则表达式（例如：openai.com/usage、re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage)）。"
+            "value": "适用于 cmux 打开链接的所有场景——终端中的链接点击、拦截的 `open https://...` 调用、内置浏览器中的链接以及侧边栏链接。每行一条规则。纯文本匹配任意 URL 子串，或使用 `re:` 前缀表示正则表达式（例如：openai.com/usage、re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage)）。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "套用於終端機連結點擊和攔截的 `open https://...` 呼叫。每行一條規則。純文字會比對 URL 的任何子字串，或加上 `re:` 前綴使用正規表示式（例如：openai.com/usage、re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage)）。"
+            "value": "套用於 cmux 開啟連結的所有情境——終端機連結點擊、攔截的 `open https://...` 呼叫、內嵌瀏覽器中的連結以及側邊欄連結。每行一條規則。純文字會比對 URL 的任何子字串，或加上 `re:` 前綴使用正規表示式（例如：openai.com/usage、re:^https?://[^/]*\\\\.example\\\\.com/(billing|usage)）。"
           }
         }
       }
