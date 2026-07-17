@@ -338,6 +338,24 @@ final class RemoteTmuxController {
 
     // MARK: - Create / destroy propagation (P5)
 
+    /// The live-mirror host for `activeTabId`, or nil (create locally). See
+    /// ``newSessionHost(activeTabId:entries:)`` for the truth table.
+    private func newSessionHost(activeTabId: UUID?) -> RemoteTmuxHost? {
+        Self.newSessionHost(
+            activeTabId: activeTabId,
+            entries: sessionMirrors.values.map { (host: $0.host, workspaceId: $0.mirroredWorkspaceId) }
+        )
+    }
+
+    /// Whether a New Workspace request in `manager` would spawn a REMOTE tmux
+    /// session rather than a local workspace. Non-mutating twin of
+    /// ``handleNewWorkspaceRequested(in:)`` — the "New Local Workspace" menu
+    /// item's visibility reads it, so the item appears exactly when plain New
+    /// Workspace would go remote.
+    func wouldNewWorkspaceSpawnRemote(in manager: TabManager) -> Bool {
+        newSessionHost(activeTabId: manager.selectedTab?.id) != nil
+    }
+
     /// New Workspace requested in `manager`: when its ACTIVE workspace is a live
     /// session mirror, create a new detached tmux session on that mirror's host and
     /// mirror it into the same manager, returning `true` (the caller suppresses
@@ -349,9 +367,8 @@ final class RemoteTmuxController {
     /// a window routinely holds mirrors from several hosts plus local workspaces,
     /// and each must route by what the user is actually sitting on.
     func handleNewWorkspaceRequested(in manager: TabManager) -> Bool {
-        let entries = sessionMirrors.values.map { (host: $0.host, workspaceId: $0.mirroredWorkspaceId) }
         guard let activeTabId = manager.selectedTab?.id,
-              let host = Self.newSessionHost(activeTabId: activeTabId, entries: entries) else {
+              let host = newSessionHost(activeTabId: activeTabId) else {
             return false
         }
         newSessionRoutingTask = Task { @MainActor in
