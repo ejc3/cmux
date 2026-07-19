@@ -1399,10 +1399,18 @@ extension Workspace {
             let restoredStartupInput = restoredRemotePTYAttachCommand == nil
                 ? (restoredBindingLaunch?.initialInput ?? restoredAgentResumeLaunch?.initialInput)
                 : nil
+            // A remote-terminal-snapshot restore runs its ssh startup command on the
+            // remote host and delivers any agent resume as typed input; no local
+            // launcher script cds the surface. Handing such a surface a local working
+            // directory is wrong, because with no saved local cwd it falls back to the
+            // home directory, which is meaningless once the shell runs ssh. So a remote
+            // restore never counts as handling the working directory locally.
             let startupHandlesWorkingDirectory =
-                restoredTmuxStartupScript != nil ||
-                restoredAgentResumeLaunch != nil ||
-                (restoredBindingLaunch != nil && resumeBinding?.isAgentHookBinding == true)
+                !restoresRemoteWorkspaceTerminalSnapshot && (
+                    restoredTmuxStartupScript != nil ||
+                    restoredAgentResumeLaunch != nil ||
+                    (restoredBindingLaunch != nil && resumeBinding?.isAgentHookBinding == true)
+                )
             // Guarded startup commands cd themselves and tolerate deleted saved directories.
             // Passing the same cwd to Ghostty can fail before the guarded command runs.
             let suppressWorkspaceRemoteStartupCommand =
