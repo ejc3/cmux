@@ -61,8 +61,9 @@ struct CodexTerminalErrorNotificationTests {
         #expect(result.status == 0, "\(result.stderr)")
         #expect(
             server.commands.contains { command in
+                // Hook notifications are non-blocking, so the hook sends the async verb.
                 command.contains(
-                    "notify_target \(workspaceID) \(surfaceID) Codex|Error|Selected model is at capacity. Please try a different model."
+                    "notify_target_async \(workspaceID) \(surfaceID) Codex|Error|Selected model is at capacity. Please try a different model."
                 )
             },
             "Expected the nested terminal error to notify, saw \(server.commands)"
