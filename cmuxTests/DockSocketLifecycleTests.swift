@@ -520,14 +520,23 @@ struct DockSocketLifecycleTests {
                     #expect(urlResult["workspace_id"] as? String == windowId.uuidString)
                     #expect(urlResult["surface_id"] as? String == dockSurfaceId.uuidString)
 
-                    await #expect(throws: (any Error).self) {
-                        try await v2ResultOnSocketWorker(method: "browser.navigate", params: [
+                    // A stale `expected_url` must be refused. Read the envelope rather than
+                    // going through the success helper: that helper records an issue as soon
+                    // as `ok` is false, so it fails the test even when the refusal is the
+                    // thing being checked. Asserting the code also checks why it was
+                    // refused; `#expect(throws:)` alone passes for any error.
+                    let staleEnvelope = try await v2EnvelopeOnSocketWorker(
+                        method: "browser.navigate",
+                        params: [
                             "workspace_id": windowId.uuidString,
                             "surface_id": dockSurfaceId.uuidString,
                             "url": "about:blank",
                             "expected_url": "https://stale.invalid",
-                        ])
-                    }
+                        ]
+                    )
+                    #expect(staleEnvelope["ok"] as? Bool != true)
+                    let staleError = try #require(staleEnvelope["error"] as? [String: Any])
+                    #expect(staleError["code"] as? String == "stale_state")
 
                     let appDelegate = try #require(AppDelegate.shared)
                     let secondManager = TabManager(autoWelcomeIfNeeded: false)
