@@ -367,12 +367,24 @@ struct DockControlDefinitionDecodingTests {
         let manager = TabManager()
         AppDelegate.shared = appDelegate
         appDelegate.tabManager = manager
-        defer { AppDelegate.shared = previousAppDelegate }
+        // The Dock resolves its confirmation manager through the registered main
+        // window context, so `confirmCloseHandler` below is only reached when the
+        // context exists. Without it the prompt falls back to a real app-modal
+        // NSAlert and blocks the test host until it is killed.
+        let windowId = appDelegate.registerMainWindowContextForTesting(tabManager: manager)
+        defer {
+            appDelegate.unregisterMainWindowContextForTesting(windowId: windowId)
+            AppDelegate.shared = previousAppDelegate
+        }
 
         let workspace = try #require(manager.tabs.first)
         defer { workspace.teardownAllPanels() }
 
         let store = workspace.dockSplit
+        // If the Dock ever stops resolving a manager,
+        // the close path shows a modal alert no test can dismiss, which times out
+        // the shared host and drops every other suite in the batch.
+        try #require(appDelegate.dockReferenceTabManager(for: store) != nil)
         let rootPane = try #require(store.bonsplitController.allPaneIds.first)
         let dirtyPanelId = try #require(store.newSurface(kind: .terminal, inPane: rootPane, focus: true))
         let cleanPanelId = try #require(store.newSurface(kind: .terminal, inPane: rootPane, focus: false))
