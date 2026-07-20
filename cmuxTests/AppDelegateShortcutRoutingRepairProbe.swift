@@ -360,7 +360,7 @@ final class WeakRefBox {
 }
 
 @MainActor
-private enum LeakGaugeSupport {
+enum LeakGaugeSupport {
     static func mainWindowCount() -> Int {
         NSApp.windows.filter { $0 is CmuxMainWindow }.count
     }
@@ -520,5 +520,48 @@ final class ZZGaugeBStrippedContentTests: XCTestCase {
         XCTAssertNil(Self.weakHostingView, "GAUGE_B: SwiftUI host leaked even after being detached from the window")
         XCTAssertNil(Self.weakWindow, "GAUGE_B: main window leaked after close with content stripped")
         XCTAssertEqual(after, Self.baseline, "GAUGE_B: cmux.main windows accumulated (baseline=\(Self.baseline) after=\(after))")
+    }
+}
+
+/// Diagnostic scaffolding (temporary): with CMUX_LEAKHUNT_DISABLE=ordering the
+/// windows free, which strips the window/_viewRoot noise out of a `leaks --trace`.
+/// What remains alive is the TabManager, so tracing it names ITS retainer.
+/// Publishes the leaked TabManager addresses (held only weakly here, so this
+/// harness is never itself the retainer) and holds the process open to be traced.
+@MainActor
+final class ZZZTabManagerTraceHarnessTests: XCTestCase {
+    func testPauseForTabManagerTrace() {
+        guard ProcessInfo.processInfo.environment["CMUX_LEAKHUNT_PAUSE_TM"] == "1" else { return }
+        guard let appDelegate = AppDelegate.shared else { return }
+        appDelegate.debugCloseMainWindowConfirmationHandler = { _ in true }
+
+        var boxes: [WeakRefBox] = []
+        for _ in 0..<5 {
+            autoreleasepool {
+                var w: NSWindow?
+                var h: NSView?
+                var t: TabManager?
+                LeakGaugeSupport.createAndCloseMainWindow(
+                    stripContent: false, window: &w, hostingView: &h, tabManager: &t
+                )
+                boxes.append(WeakRefBox(t))
+            }
+            LeakGaugeSupport.drain(10)
+        }
+        LeakGaugeSupport.drain(60)
+
+        let live = boxes.compactMap { $0.object }
+        let addrs = live.map { obj -> String in
+            "0x" + String(UInt(bitPattern: Unmanaged.passUnretained(obj).toOpaque()), radix: 16)
+        }
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let payload = (["pid=\(pid)"] + addrs).joined(separator: "\n")
+        try? payload.write(toFile: "/tmp/leakhunt-tm-addrs.txt", atomically: true, encoding: .utf8)
+        print("LEAKHUNT_TM_READY pid=\(pid) liveTabManagers=\(live.count)/\(boxes.count) addrs=\(addrs.joined(separator: ","))")
+
+        let deadline = Date(timeIntervalSinceNow: 600)
+        while Date() < deadline, !FileManager.default.fileExists(atPath: "/tmp/leakhunt-tm-release") {
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.25))
+        }
     }
 }
