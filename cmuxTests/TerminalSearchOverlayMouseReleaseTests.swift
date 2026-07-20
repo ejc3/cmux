@@ -12,7 +12,7 @@ import CmuxTerminal
 @Suite("Terminal search overlay mouse release")
 struct TerminalSearchOverlayMouseReleaseTests {
     @Test("Search overlay forwards terminal mouse release during selection drag")
-    func searchOverlayForwardsTerminalMouseReleaseDuringSelectionDrag() throws {
+    func searchOverlayForwardsTerminalMouseReleaseDuringSelectionDrag() async throws {
         let surface = makeTerminalSurface()
         defer { surface.releaseSurfaceForTesting() }
 
@@ -20,7 +20,7 @@ struct TerminalSearchOverlayMouseReleaseTests {
         defer { window.orderOut(nil) }
 
         hostedView.setSearchOverlay(searchState: TerminalSurface.SearchState(needle: "needle"))
-        #expect(waitUntil(description: "search overlay to mount") {
+        #expect(await waitUntil(description: "search overlay to mount") {
             hostedView.debugHasSearchOverlay()
         })
 
@@ -49,7 +49,7 @@ struct TerminalSearchOverlayMouseReleaseTests {
     }
 
     @Test("Search overlay release clears pending selection after surface release")
-    func searchOverlayMouseReleaseClearsSelectionDragAfterSurfaceRelease() throws {
+    func searchOverlayMouseReleaseClearsSelectionDragAfterSurfaceRelease() async throws {
         let surface = makeTerminalSurface()
         defer { surface.releaseSurfaceForTesting() }
 
@@ -57,7 +57,7 @@ struct TerminalSearchOverlayMouseReleaseTests {
         defer { window.orderOut(nil) }
 
         hostedView.setSearchOverlay(searchState: TerminalSurface.SearchState(needle: "needle"))
-        #expect(waitUntil(description: "search overlay to mount") {
+        #expect(await waitUntil(description: "search overlay to mount") {
             hostedView.debugHasSearchOverlay()
         })
 
@@ -135,17 +135,26 @@ struct TerminalSearchOverlayMouseReleaseTests {
             .first
     }
 
+    /// Waits for the search overlay to mount.
+    ///
+    /// `setSearchOverlay` does not add the overlay as a subview synchronously. It stores the
+    /// hosting view and posts the `addSubview` to the main queue through
+    /// `scheduleDeferredSearchOverlayMutation`, so `debugHasSearchOverlay()` stays false until a
+    /// later main-queue turn. This suite is `@MainActor`, so the test body holds the main thread,
+    /// and the old bounded `RunLoop.current` spin never let the queued mount run. Suspending with
+    /// `Task.sleep` yields the main thread so the queued mount can execute.
     private func waitUntil(
-        timeout: TimeInterval = 1.0,
+        timeout: TimeInterval = 2.0,
         description: String,
         _ condition: @escaping () -> Bool
-    ) -> Bool {
+    ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if condition() {
                 return true
             }
-            _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(10))
         }
         return condition()
     }
