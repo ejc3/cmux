@@ -342,3 +342,183 @@ final class ZZZLeakhuntPauseHarnessTests: XCTestCase {
         print("LEAKHUNT_PAUSE_RELEASED")
     }
 }
+
+// MARK: - Pool-safe window leak gauges
+//
+// The earlier levels asserted inside the same test that created the windows, so
+// AppKit's retain+autorelease churn (the pools dump showed COALESCED
+// AUTORELEASES: 23 on a single window) could keep a window alive until the test
+// method returned and read as a leak. These gauges create in one test and measure
+// in a LATER one, so every pool in between has drained. Counts only — no timings.
+
+
+/// Weak handle so the gauge can count how many of N created objects survived.
+@MainActor
+final class WeakRefBox {
+    weak var object: AnyObject?
+    init(_ object: AnyObject?) { self.object = object }
+}
+
+@MainActor
+private enum LeakGaugeSupport {
+    static func mainWindowCount() -> Int {
+        NSApp.windows.filter { $0 is CmuxMainWindow }.count
+    }
+
+    /// Creates a main window through the product path and closes it, optionally
+    /// swapping the SwiftUI content host for a plain NSView first. Returns weak
+    /// handles so a later test can see what actually died.
+    static func createAndCloseMainWindow(
+        stripContent: Bool,
+        window outWindow: inout NSWindow?,
+        hostingView outHostingView: inout NSView?,
+        tabManager outTabManager: inout TabManager?
+    ) {
+        guard let appDelegate = AppDelegate.shared else { return }
+        let windowId = appDelegate.createMainWindow(shouldActivate: false)
+        // Resolve through the registered context, NOT the cmux.main.* identifier:
+        // that identifier is applied by ContentView once SwiftUI lays the window
+        // out, so an unshown window has none and an identifier lookup silently
+        // finds nothing (which would make this helper skip the close and report a
+        // false "freed").
+        let identifier = "cmux.main.\(windowId.uuidString)"
+        let resolved = appDelegate.mainWindowContexts.values.first(where: { $0.windowId == windowId })?.window
+            ?? NSApp.windows.first(where: { $0.identifier?.rawValue == identifier })
+        guard let window = resolved else {
+            XCTFail("LeakGauge: could not resolve the window created for \(windowId)")
+            return
+        }
+        outWindow = window
+        outHostingView = window.contentView
+        outTabManager = appDelegate.mainWindowContexts.values.first(where: { $0.windowId == windowId })?.tabManager
+        window.animationBehavior = .none
+        if stripContent {
+            // Drop the SwiftUI host (and the AttributeGraph it owns) before close.
+            // If the window now dies, the graph was the owner; if it still leaks,
+            // the owner is on the AppKit side.
+            window.contentView = NSView(frame: .zero)
+        }
+        window.orderOut(nil)
+        window.close()
+    }
+
+    static func drain(_ turns: Int = 30) {
+        for _ in 0..<turns { RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.01)) }
+    }
+}
+
+/// Gauge A: the product path exactly as the suites drive it.
+@MainActor
+final class ZZGaugeAPlainCloseTests: XCTestCase {
+    private static var baseline = 0
+    private static weak var weakWindow: NSWindow?
+    private static weak var weakHostingView: NSView?
+    private static weak var weakTabManager: TabManager?
+    private static var tabManagerBoxes: [WeakRefBox] = []
+    private static var windowBoxes: [WeakRefBox] = []
+
+    func test1RecordBaseline() {
+        Self.baseline = LeakGaugeSupport.mainWindowCount()
+        print("GAUGE_A baseline=\(Self.baseline)")
+    }
+
+    func test2CreateAndCloseFiveWindows() {
+        guard let appDelegate = AppDelegate.shared else { return }
+        let previous = appDelegate.debugCloseMainWindowConfirmationHandler
+        appDelegate.debugCloseMainWindowConfirmationHandler = { _ in true }
+        defer { appDelegate.debugCloseMainWindowConfirmationHandler = previous }
+        for index in 0..<5 {
+            autoreleasepool {
+                var w: NSWindow?
+                var h: NSView?
+                var t: TabManager?
+                LeakGaugeSupport.createAndCloseMainWindow(
+                    stripContent: false, window: &w, hostingView: &h, tabManager: &t
+                )
+                Self.tabManagerBoxes.append(WeakRefBox(t))
+                Self.windowBoxes.append(WeakRefBox(w))
+                if index == 0 {
+                    Self.weakWindow = w
+                    Self.weakHostingView = h
+                    Self.weakTabManager = t
+                }
+            }
+            LeakGaugeSupport.drain(10)
+        }
+        LeakGaugeSupport.drain()
+    }
+
+    func test3AssertNoAccumulation() {
+        LeakGaugeSupport.drain()
+        let after = LeakGaugeSupport.mainWindowCount()
+        let liveManagers = Self.tabManagerBoxes.filter { $0.object != nil }.count
+        let liveWindows = Self.windowBoxes.filter { $0.object != nil }.count
+        print("GAUGE_A liveTabManagers=\(liveManagers)/\(Self.tabManagerBoxes.count) liveWindows=\(liveWindows)/\(Self.windowBoxes.count)")
+        print("""
+        GAUGE_A after=\(after) baseline=\(Self.baseline) \
+        window=\(Self.weakWindow == nil ? "freed" : "LEAKED") \
+        hostingView=\(Self.weakHostingView == nil ? "freed" : "LEAKED") \
+        tabManager=\(Self.weakTabManager == nil ? "freed" : "LEAKED")
+        """)
+        // mainWindowContexts holds tabManager strongly and is keyed by the window;
+        // WindowCloseObserver -> unregisterMainWindow is supposed to drop the entry
+        // on close. If this count grew, that teardown is the TabManager retainer.
+        print("GAUGE_A ctxs=\(AppDelegate.shared?.mainWindowContexts.count ?? -1)")
+        XCTAssertNil(Self.weakTabManager, "GAUGE_A: TabManager leaked after window close (the 19GB shape)")
+        XCTAssertNil(Self.weakWindow, "GAUGE_A: main window leaked after close")
+        XCTAssertEqual(after, Self.baseline, "GAUGE_A: cmux.main windows accumulated (baseline=\(Self.baseline) after=\(after))")
+    }
+}
+
+/// Gauge B: identical, except the SwiftUI content host is replaced with a plain
+/// NSView before close. Isolates SwiftUI's AttributeGraph from AppKit as the owner.
+@MainActor
+final class ZZGaugeBStrippedContentTests: XCTestCase {
+    private static var baseline = 0
+    private static weak var weakWindow: NSWindow?
+    private static weak var weakHostingView: NSView?
+    private static weak var weakTabManager: TabManager?
+
+    func test1RecordBaseline() {
+        Self.baseline = LeakGaugeSupport.mainWindowCount()
+        print("GAUGE_B baseline=\(Self.baseline)")
+    }
+
+    func test2CreateStripContentAndCloseFiveWindows() {
+        guard let appDelegate = AppDelegate.shared else { return }
+        let previous = appDelegate.debugCloseMainWindowConfirmationHandler
+        appDelegate.debugCloseMainWindowConfirmationHandler = { _ in true }
+        defer { appDelegate.debugCloseMainWindowConfirmationHandler = previous }
+        for index in 0..<5 {
+            autoreleasepool {
+                var w: NSWindow?
+                var h: NSView?
+                var t: TabManager?
+                LeakGaugeSupport.createAndCloseMainWindow(
+                    stripContent: true, window: &w, hostingView: &h, tabManager: &t
+                )
+                if index == 0 {
+                    Self.weakWindow = w
+                    Self.weakHostingView = h
+                    Self.weakTabManager = t
+                }
+            }
+            LeakGaugeSupport.drain(10)
+        }
+        LeakGaugeSupport.drain()
+    }
+
+    func test3AssertNoAccumulation() {
+        LeakGaugeSupport.drain()
+        let after = LeakGaugeSupport.mainWindowCount()
+        print("""
+        GAUGE_B after=\(after) baseline=\(Self.baseline) \
+        window=\(Self.weakWindow == nil ? "freed" : "LEAKED") \
+        hostingView=\(Self.weakHostingView == nil ? "freed" : "LEAKED") \
+        tabManager=\(Self.weakTabManager == nil ? "freed" : "LEAKED")
+        """)
+        XCTAssertNil(Self.weakHostingView, "GAUGE_B: SwiftUI host leaked even after being detached from the window")
+        XCTAssertNil(Self.weakWindow, "GAUGE_B: main window leaked after close with content stripped")
+        XCTAssertEqual(after, Self.baseline, "GAUGE_B: cmux.main windows accumulated (baseline=\(Self.baseline) after=\(after))")
+    }
+}
