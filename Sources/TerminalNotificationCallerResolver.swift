@@ -111,7 +111,9 @@ extension TerminalController {
         if let preferredWorkspaceId { append(app?.tabManagerFor(tabId: preferredWorkspaceId)) }
         if let preferredSurfaceId { append(app?.locateSurface(surfaceId: preferredSurfaceId)?.tabManager) }
         append(fallback)
-        app?.listMainWindowSummaries().forEach { append(app?.tabManagerFor(windowId: $0.windowId)) }
+        // Resolving a notification's caller must still work
+        // for a window the user closed while its workspaces are alive.
+        app?.routableMainWindowIds().forEach { append(app?.tabManagerFor(windowId: $0)) }
         return managers
     }
 

@@ -5636,7 +5636,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func focusMainWindow(windowId: UUID) -> Bool {
-        guard let window = windowForMainWindowId(windowId) else { return false }
+        // A closed window stays in `NSApp.windows`
+        // while anything still holds it, so identity alone would find it here and
+        // focus would bring a window the user closed back on screen.
+        guard let window = windowForMainWindowId(windowId), window.isReachableByUser else { return false }
         let didFocus = mainWindowVisibilityController.focus(window, reason: .focusMainWindow)
         if didFocus {
             publishCmuxWindowLifecycle(name: "window.focused", windowId: windowId, origin: "focus_request")

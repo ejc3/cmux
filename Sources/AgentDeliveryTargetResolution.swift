@@ -175,7 +175,9 @@ extension AppDelegate {
             guard let manager, !managers.contains(where: { $0 === manager }) else { return }
             managers.append(manager)
         }
-        listMainWindowSummaries().forEach { append(tabManagerFor(windowId: $0.windowId)) }
+        // An agent's notification must still find its
+        // workspace after the window it lives in is closed but not yet torn down.
+        routableMainWindowIds().forEach { append(tabManagerFor(windowId: $0)) }
         append(tabManager)
         return managers
     }

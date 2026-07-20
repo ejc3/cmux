@@ -156,19 +156,57 @@ extension AppDelegate {
         return sortedRecoverableMainWindowRoutes().filter { validWindowIds.contains($0.windowId) }
     }
 
-    func listMainWindowSummaries() -> [MainWindowSummary] {
+    /// Every main window id that can still route work to a `TabManager`, closed
+    /// windows included.
+    ///
+    /// Routing needs an answer for a closed window and listing does not, so this is
+    /// separate from ``listMainWindowSummaries()``. Listing must hide a window the user
+    /// closed. Routing must still reach a workspace whose objects are alive, so a
+    /// notification addressed to it lands and the agents still running in that window
+    /// keep delivery.
+    func routableMainWindowIds() -> [UUID] {
         var seen: Set<UUID> = []
-        var summaries = liveRegisteredMainWindowRouteSnapshots().map { snapshot in
-            seen.insert(snapshot.windowId)
-            return MainWindowSummary(
-                windowId: snapshot.windowId,
-                isKeyWindow: snapshot.window?.isKeyWindow ?? false,
-                isVisible: snapshot.window?.isVisible ?? false,
-                workspaceCount: snapshot.tabManager.tabs.count,
-                selectedWorkspaceId: snapshot.tabManager.selectedTabId
-            )
+        var ids: [UUID] = []
+        for snapshot in liveRegisteredMainWindowRouteSnapshots() where seen.insert(snapshot.windowId).inserted {
+            ids.append(snapshot.windowId)
         }
         for snapshot in recoverableMainWindowRouteSnapshots() where seen.insert(snapshot.windowId).inserted {
+            ids.append(snapshot.windowId)
+        }
+        return ids
+    }
+
+    /// Lists the main windows a caller can act on.
+    ///
+    /// A closed window keeps its route and its objects for as long as something
+    /// references them, so it must not be listed to a caller that lists windows in
+    /// order to show or focus them.
+    ///
+    /// Only the recoverable snapshots need the reachability check. Registering a main
+    /// window installs a `WindowCloseObserver` that unregisters it on close, so a closed
+    /// window is already gone from the registered snapshots and can only survive among the
+    /// recoverable ones. Checking the registered snapshots as well would drop a window
+    /// that is open but not on screen yet, since a window is registered before it is
+    /// first ordered front and `isVisible` is false until then.
+    ///
+    /// This filters presentation only. Callers that need to *route* to a window
+    /// rather than show it should use ``routableMainWindowIds()``, which keeps answering
+    /// for a closed window while its objects are still referenced.
+    func listMainWindowSummaries() -> [MainWindowSummary] {
+        var seen: Set<UUID> = []
+        var summaries = liveRegisteredMainWindowRouteSnapshots()
+            .map { snapshot in
+                seen.insert(snapshot.windowId)
+                return MainWindowSummary(
+                    windowId: snapshot.windowId,
+                    isKeyWindow: snapshot.window?.isKeyWindow ?? false,
+                    isVisible: snapshot.window?.isVisible ?? false,
+                    workspaceCount: snapshot.tabManager.tabs.count,
+                    selectedWorkspaceId: snapshot.tabManager.selectedTabId
+                )
+            }
+        for snapshot in recoverableMainWindowRouteSnapshots()
+        where snapshot.window?.isReachableByUser == true && seen.insert(snapshot.windowId).inserted {
             summaries.append(
                 MainWindowSummary(
                     windowId: snapshot.windowId,

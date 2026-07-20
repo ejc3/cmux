@@ -446,10 +446,10 @@ extension TerminalController {
                 return (location.windowId, location.workspaceId, location.tabManager)
             }
         }
-        for summary in app.listMainWindowSummaries() {
-            guard let manager = app.tabManagerFor(windowId: summary.windowId),
+        for windowId in app.routableMainWindowIds() {
+            guard let manager = app.tabManagerFor(windowId: windowId),
                   let workspace = manager.tabs.first(where: { $0.containsDockPanel(surfaceId) }) else { continue }
-            return (summary.windowId, workspace.id, manager)
+            return (windowId, workspace.id, manager)
         }
         return nil
     }
@@ -461,10 +461,10 @@ extension TerminalController {
                 return (location.windowId, location.workspaceId, location.tabManager, workspace)
             }
         }
-        for summary in app.listMainWindowSummaries() {
-            guard let manager = app.tabManagerFor(windowId: summary.windowId),
+        for windowId in app.routableMainWindowIds() {
+            guard let manager = app.tabManagerFor(windowId: windowId),
                   let workspace = manager.tabs.first(where: { $0.containsDockPane(paneId) }) else { continue }
-            return (summary.windowId, workspace.id, manager, workspace)
+            return (windowId, workspace.id, manager, workspace)
         }
         return nil
     }

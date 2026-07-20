@@ -106,6 +106,12 @@ struct ClosedMainWindowRoutingTests {
         #expect(!app.focusMainWindow(windowId: windowBId))
         #expect(!windowB.isVisible)
         #expect(app.tabManagerFor(windowId: windowBId) === managerB)
+        // Hiding a closed window from the list must
+        // not also hide it from the resolvers that locate panes and deliver agent
+        // notifications, or closing a window would drop work aimed at the
+        // workspaces still alive inside it. Nothing else covers that, and the
+        // callers most at risk (`locateDockPane`, `v2LocatePane`) go through here.
+        #expect(app.routableMainWindowIds().contains(windowBId))
     }
 
     @Test("Recovered visible window stays listed and focusable")

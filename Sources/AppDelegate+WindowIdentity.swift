@@ -1,6 +1,21 @@
 import AppKit
 import Foundation
 
+extension NSWindow {
+    /// Whether the user can still reach this window: it is on screen, or it is
+    /// minimized in the Dock and one click from coming back.
+    ///
+    /// `isVisible` alone is the wrong check. A miniaturized window
+    /// reports `isVisible == false` yet is still open, so filtering on
+    /// visibility would hide minimized windows from the switcher. And a window
+    /// that was `orderOut(_:)`'d stays in `NSApp.windows` for as long as anything
+    /// still references it, so looking it up by identity keeps finding it long
+    /// after it closed. That is how a closed window gets listed and focused.
+    var isReachableByUser: Bool {
+        isVisible || isMiniaturized
+    }
+}
+
 @MainActor
 extension AppDelegate {
     func mainWindow(for windowId: UUID) -> NSWindow? {
