@@ -27,11 +27,21 @@ extension AgentNotificationRegressionTests {
     private func makeLiveRetargetFixture() throws -> LiveRetargetFixture {
         let store = TerminalNotificationStore.shared
         let appDelegate = AppDelegate.shared ?? AppDelegate()
-        let manager = appDelegate.tabManager ?? TabManager()
+        // This fixture creates its own tab manager rather than using
+        // `AppDelegate.shared`'s. These tests need a registered window context to
+        // resolve through, and registering one for a manager the app already owns
+        // would replace its real context with a windowless one and discard it on
+        // teardown. That moves the problem to the next suite instead of fixing it.
+        // The tests only touch the workspaces added below.
+        let manager = TabManager()
 
         let originalTabManager = appDelegate.tabManager
         let originalNotificationStore = appDelegate.notificationStore
         let originalAppFocusOverride = AppFocusState.overrideIsFocused
+        // Caller-context resolution reads the shared controller's active manager.
+        // Nothing here established it, so these tests inherited whatever the previous
+        // suite left and failed beside any suite whose teardown clears it.
+        let originalActiveTabManager = TerminalController.shared.activeTabManagerForCallerNotification()
 
         store.replaceNotificationsForTesting([])
         store.configureNotificationDeliveryHandlerForTesting { _, _ in }
@@ -39,6 +49,11 @@ extension AgentNotificationRegressionTests {
         appDelegate.tabManager = manager
         appDelegate.notificationStore = store
         AppFocusState.overrideIsFocused = false
+
+        // Workspace-scoped routing resolves through a registered context, so register
+        // one here.
+        let windowId = appDelegate.registerMainWindowContextForTesting(tabManager: manager)
+        TerminalController.shared.setActiveTabManager(manager)
 
         let claimedWorkspace = manager.addWorkspace(select: false)
         let owningWorkspace = manager.addWorkspace(select: true)
@@ -48,9 +63,12 @@ extension AgentNotificationRegressionTests {
             for workspace in [claimedWorkspace, owningWorkspace] where manager.tabs.contains(where: { $0.id == workspace.id }) {
                 manager.closeWorkspace(workspace)
             }
+            appDelegate.unregisterMainWindowContextForTesting(windowId: windowId)
             store.replaceNotificationsForTesting([])
             store.resetNotificationDeliveryHandlerForTesting()
             store.resetSuppressedNotificationFeedbackHandlerForTesting()
+            // This runs after the unregister so the next suite starts where we found it.
+            TerminalController.shared.setActiveTabManager(originalActiveTabManager)
             appDelegate.tabManager = originalTabManager
             appDelegate.notificationStore = originalNotificationStore
             AppFocusState.overrideIsFocused = originalAppFocusOverride
