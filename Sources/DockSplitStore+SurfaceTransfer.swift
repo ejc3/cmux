@@ -347,8 +347,11 @@ extension DockSplitStore {
                 bonsplitController.selectTab(tabId)
                 applyDockSelection(tabId: tabId, inPane: paneId)
             }
+            // This now sits inside the coalescing scope. It reconciles synchronously and
+            // asks for a reattach of its own when the portal moved, so running it after the
+            // scope closed made one attach reattach the view twice.
+            scheduleDockPortalReconcile(reason: reconcileReason)
         }
-        scheduleDockPortalReconcile(reason: reconcileReason)
     }
 }
 

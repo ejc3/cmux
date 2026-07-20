@@ -108,14 +108,19 @@ extension DockSplitStore {
     }
 
     func applyFocusedDockSelection() {
-        guard let paneId = bonsplitController.focusedPaneId,
-              let tabId = bonsplitController.selectedTab(inPane: paneId)?.id else {
-            applyVisibilityToAllPanels()
-            scheduleDockPortalReconcile(reason: "dock.selection.empty")
-            return
+        // Applying visibility and reconciling the portal each ask for a reattach, and
+        // the reconcile runs synchronously, so revealing a Dock reattached the view
+        // twice until both shared one coalescing scope.
+        withCoalescedTerminalViewReattach {
+            guard let paneId = bonsplitController.focusedPaneId,
+                  let tabId = bonsplitController.selectedTab(inPane: paneId)?.id else {
+                applyVisibilityToAllPanels()
+                scheduleDockPortalReconcile(reason: "dock.selection.empty")
+                return
+            }
+            applyDockSelection(tabId: tabId, inPane: paneId)
+            scheduleDockPortalReconcile(reason: "dock.selection.focused")
         }
-        applyDockSelection(tabId: tabId, inPane: paneId)
-        scheduleDockPortalReconcile(reason: "dock.selection.focused")
     }
 
     func applyDockSelection(tabId: TabID, inPane pane: PaneID) {
