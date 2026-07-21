@@ -1469,7 +1469,10 @@ extension Workspace {
             // working directory asks the far host to enter a path from here.
             let requestedWorkingDirectory = localWorkingDirectory
                 ?? (startupHandlesWorkingDirectory && restoresLocalTerminalSurface ? workingDirectory : nil)
-            let restoredAgentWillRunStartupCommand = restorableAgent != nil && (
+            // Deliberately not gated on `restorableAgent != nil`: a binding-only agent-hook restore
+            // has no restorable agent yet still runs a startup command, and gating on the agent threw
+            // that state away. The clauses below already require an agent-hook binding where it matters.
+            let restoredAgentWillRunStartupCommand = (
                 restoredAgentResumeLaunch?.initialCommand != nil ||
                 (restoredBindingLaunch?.initialCommand != nil && resumeBinding?.isAgentHookBinding == true) ||
                 (restoredPersistentSSHResumeCommand != nil && resumeBinding?.isAgentHookBinding == true)
