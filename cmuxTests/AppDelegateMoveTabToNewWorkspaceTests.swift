@@ -17,7 +17,7 @@ struct AppDelegateMoveTabToNewWorkspaceTests {
     func moveSurfaceToNewWorkspaceCreatesSinglePanelWorkspaceFromPanelTitle() throws {
         let app = AppDelegate()
         let windowId = UUID()
-        let manager = TabManager()
+        let manager = TabManager(autoWelcomeIfNeeded: false)
         app.registerMainWindowContextForTesting(windowId: windowId, tabManager: manager)
         defer { app.unregisterMainWindowContextForTesting(windowId: windowId) }
 
@@ -61,6 +61,7 @@ struct AppDelegateMoveTabToNewWorkspaceTests {
 
         let scheduler = ManualCoalescerScheduler()
         let manager = TabManager(
+            autoWelcomeIfNeeded: false,
             panelTitleUpdateCoalescer: NotificationBurstCoalescer(
                 schedule: scheduler.schedule(delay:action:)
             ),
@@ -135,7 +136,7 @@ struct AppDelegateMoveTabToNewWorkspaceTests {
 
         let app = AppDelegate()
         let windowId = UUID()
-        let manager = TabManager()
+        let manager = TabManager(autoWelcomeIfNeeded: false)
         app.registerMainWindowContextForTesting(windowId: windowId, tabManager: manager)
         defer { app.unregisterMainWindowContextForTesting(windowId: windowId) }
 
@@ -163,7 +164,7 @@ struct AppDelegateMoveTabToNewWorkspaceTests {
     func moveBrowserBonsplitTabToNewWorkspaceRequestsAddressBarFocus() throws {
         let app = AppDelegate()
         let windowId = UUID()
-        let manager = TabManager()
+        let manager = TabManager(autoWelcomeIfNeeded: false)
         app.registerMainWindowContextForTesting(windowId: windowId, tabManager: manager)
         defer { app.unregisterMainWindowContextForTesting(windowId: windowId) }
 
@@ -198,7 +199,7 @@ struct AppDelegateMoveTabToNewWorkspaceTests {
     func moveSurfaceToNewWorkspaceRejectsOnlyPanel() throws {
         let app = AppDelegate()
         let windowId = UUID()
-        let manager = TabManager()
+        let manager = TabManager(autoWelcomeIfNeeded: false)
         app.registerMainWindowContextForTesting(windowId: windowId, tabManager: manager)
         defer { app.unregisterMainWindowContextForTesting(windowId: windowId) }
 
@@ -215,7 +216,7 @@ struct AppDelegateMoveTabToNewWorkspaceTests {
     func moveTerminalBonsplitTabToExistingWorkspaceClosesEmptiedSourceWorkspace() throws {
         let app = AppDelegate()
         let windowId = UUID()
-        let manager = TabManager()
+        let manager = TabManager(autoWelcomeIfNeeded: false)
         app.registerMainWindowContextForTesting(windowId: windowId, tabManager: manager)
         defer { app.unregisterMainWindowContextForTesting(windowId: windowId) }
 
@@ -245,7 +246,7 @@ struct AppDelegateMoveTabToNewWorkspaceTests {
     func moveSurfaceToExistingWorkspaceClosesEmptiedSourceWorkspaceAndFocusesDestination() throws {
         let app = AppDelegate()
         let windowId = UUID()
-        let manager = TabManager()
+        let manager = TabManager(autoWelcomeIfNeeded: false)
         app.registerMainWindowContextForTesting(windowId: windowId, tabManager: manager)
         defer { app.unregisterMainWindowContextForTesting(windowId: windowId) }
 
