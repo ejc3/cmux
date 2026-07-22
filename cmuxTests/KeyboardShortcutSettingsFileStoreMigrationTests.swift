@@ -135,6 +135,17 @@ final class KeyboardShortcutSettingsFileStoreMigrationTests: XCTestCase {
             notificationCenter: NotificationCenter(),
             startWatching: false
         )
+        // `resetAll()` above and this store swap each post `didChangeNotification` on
+        // `NotificationCenter.default`, and `SystemWideHotkeyController` answers that on
+        // `OperationQueue.main`, re-registering the global-search hotkey. That re-registration
+        // walks `Action.allCases` through the conflict-aware path twice per call. The lookup
+        // observer is a process-global hook, so if that deferred work runs inside the window
+        // below it lands in the recorder and the assertion reads someone else's lookups. Let the
+        // main queue reach this point first.
+        let pendingMainQueueWork = expectation(description: "deferred settings observers ran")
+        DispatchQueue.main.async { pendingMainQueueWork.fulfill() }
+        wait(for: [pendingMainQueueWork], timeout: 5)
+
         let lookupRecorder = ShortcutSettingsLookupRecorder()
         KeyboardShortcutSettings.shortcutLookupObserver = { action in
             lookupRecorder.actions.append(action.rawValue)
@@ -176,14 +187,20 @@ final class KeyboardShortcutSettingsFileStoreMigrationTests: XCTestCase {
             to: legacySettingsURL
         )
 
+        // Narrow the recorded window to the parse itself: clear immediately before, snapshot
+        // immediately after, and stop observing. Anything the rest of the process looks up
+        // outside these two statements is not this test's business.
+        lookupRecorder.actions.removeAll()
         let store = KeyboardShortcutSettingsFileStore(
             primaryPath: primaryURL.path,
             fallbackPath: legacySettingsURL.path,
             notificationCenter: parsingNotificationCenter,
             startWatching: false
         )
+        let lookupsDuringParse = lookupRecorder.actions
+        KeyboardShortcutSettings.shortcutLookupObserver = nil
 
-        XCTAssertEqual(lookupRecorder.actions, [])
+        XCTAssertEqual(lookupsDuringParse, [])
         XCTAssertEqual(defaultNotificationCounter.count, 0)
         XCTAssertEqual(parsingNotificationCounter.count, 1)
         XCTAssertEqual(
