@@ -2708,16 +2708,16 @@ final class BrowserSessionHistoryRestoreTests: XCTestCase {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01))
-            // Check the web view's own URL, not the omnibar string. The panel
-            // publishes the destination URL as soon as a navigation is requested
-            // and only raises `isLoading` once WebKit reports the provisional
-            // navigation, so the omnibar already reads as the target while
-            // `isLoading` is still false — a window in which this would return
-            // before the page had loaded at all. WebKit sets `webView.url` when
-            // the navigation commits, so it cannot be satisfied early.
+            // Check live WebKit state, not the panel's published mirrors. The panel publishes the
+            // destination URL as soon as a navigation is requested and only raises `isLoading` once
+            // WebKit reports the provisional navigation, so the omnibar already reads as the target
+            // while `isLoading` is still false. Both proofs are required here: `webView.url` is set
+            // when the navigation commits, and `backForwardList.currentItem` appears only once it
+            // has, so neither can be satisfied before the load begins.
             if panel.webView.url?.absoluteString == url.absoluteString,
                !panel.webView.isLoading,
-               !panel.isLoading {
+               !panel.isLoading,
+               panel.webView.backForwardList.currentItem?.url.absoluteString == url.absoluteString {
                 return
             }
         }
@@ -2725,6 +2725,7 @@ final class BrowserSessionHistoryRestoreTests: XCTestCase {
         XCTFail(
             "Timed out waiting for browser panel to load \(url.absoluteString). "
                 + "Live=\(panel.webView.url?.absoluteString ?? "nil") "
+                + "Committed=\(panel.webView.backForwardList.currentItem?.url.absoluteString ?? "nil") "
                 + "Omnibar=\(panel.preferredURLStringForOmnibar() ?? "nil") "
                 + "webViewLoading=\(panel.webView.isLoading) panelLoading=\(panel.isLoading)",
             file: file,
@@ -2843,13 +2844,22 @@ final class BrowserSessionHistoryRestoreTests: XCTestCase {
         let server = try ProvisionalNavigationRaceServer()
         defer { server.stop() }
 
+        // WebKit appends to the back-forward list only when a navigation
+        // commits, so one committed page leaves `canGoBack` false and a back
+        // raced against the held page B request would have nowhere to go.
+        // Commit two pages first, then race the back from page A.
+        let pagePrevious = server.url(path: "/previous")
         let pageA = server.url(path: "/a")
         let pageB = server.url(path: "/b")
-        let panel = BrowserPanel(workspaceId: UUID(), initialURL: pageA)
+        let panel = BrowserPanel(workspaceId: UUID(), initialURL: pagePrevious)
         defer { panel.close() }
 
+        waitForBrowserPanel(panel, url: pagePrevious)
+        panel.navigate(to: pageA)
         waitForBrowserPanel(panel, url: pageA)
-        XCTAssertEqual(panel.pageTitle, "Race A")
+        // The published title arrives one main-actor hop after the load
+        // finishes, so wait for it rather than reading it immediately.
+        waitUntil("page A title to publish") { panel.pageTitle == "Race A" }
 
         panel.navigate(to: pageB)
         waitUntil("server to receive provisional page B request") {
@@ -2858,25 +2868,35 @@ final class BrowserSessionHistoryRestoreTests: XCTestCase {
         waitUntil("browser back availability during provisional page B navigation") {
             panel.canGoBack && panel.webView.isLoading
         }
-        XCTAssertFalse(panel.canGoForward)
+        XCTAssertFalse(panel.canGoForward, "held page B must not enter history")
 
         panel.goBack()
-        waitUntil("back action to expose page B as forward history before it can commit") {
-            panel.currentURL?.path == pageA.path && !panel.webView.isLoading
+        // Back cancels the held page B navigation and returns to the page behind
+        // page A. Page A, the page the user left, becomes the forward entry, and
+        // the published URL has to match the page WebKit actually committed.
+        waitUntil("back to cancel page B and settle on the previous page") {
+            panel.currentURL?.path == pagePrevious.path
+                && panel.webView.backForwardList.currentItem?.url.path == pagePrevious.path
+                && !panel.webView.isLoading
                 && panel.canGoForward
         }
 
         let releasedBResponseCount = server.releaseHeldBResponses()
         XCTAssertGreaterThan(releasedBResponseCount, 0)
-        waitUntil("browser to remain on page A after held page B response is released") {
+        waitUntil("released page B response to stay out of the pane") {
             !panel.webView.isLoading &&
                 panel.pageTitle == "Race A" &&
-                panel.currentURL?.path == pageA.path
+                panel.currentURL?.path == pagePrevious.path
         }
 
         let publishedURL = try XCTUnwrap(panel.currentURL)
-        XCTAssertEqual(publishedURL.path, pageA.path)
+        XCTAssertEqual(publishedURL.path, pagePrevious.path)
+        XCTAssertEqual(panel.webView.url?.path, pagePrevious.path)
         XCTAssertEqual(panel.pageTitle, "Race A")
+        XCTAssertEqual(
+            panel.webView.backForwardList.forwardList.map(\.url.path),
+            [pageA.path]
+        )
     }
 
     func testWebViewReplacementAfterProcessTerminationUpdatesInstanceIdentity() {
