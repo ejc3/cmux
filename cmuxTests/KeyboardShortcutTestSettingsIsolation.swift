@@ -16,7 +16,12 @@ extension KeyboardShortcutSettings {
             primaryPath: settingsFileURL.path,
             fallbackPath: nil,
             additionalFallbackPaths: [],
-            startWatching: false
+            startWatching: false,
+            // An isolated store reads its own temp file; it has no business reverting the host's
+            // managed settings or deleting the bookkeeping that would restore them. Twelve suites
+            // reach this helper, so opting out here is what keeps them from mutating the real
+            // defaults domain that other suites read.
+            applyManagedSettings: false
         )
         return original
     }

@@ -90,6 +90,12 @@ final class CmuxSettingsFileStore {
     private let passwordStore: SocketControlPasswordStore
     private let appearanceEnvironment: AppearanceSettings.LiveApplyEnvironment
     private let onWatchedFileReload: @MainActor @Sendable (String) -> Void
+    /// Whether this store may apply, revert, or re-import managed settings in UserDefaults.
+    ///
+    /// Gates the construction-time reload AND the defaults observer below. Gating only the first
+    /// would leave the store reapplying managed settings on the next unrelated defaults write,
+    /// which is the same leak one step later.
+    private let appliesManagedSettings: Bool
     private let stateLock = NSLock()
 
     private var watchers: [FileWatcher] = []
@@ -116,6 +122,12 @@ final class CmuxSettingsFileStore {
         appearanceEnvironment: AppearanceSettings.LiveApplyEnvironment = .live,
         passwordStore: SocketControlPasswordStore = SocketControlPasswordStore(),
         startWatching: Bool = true,
+        // Whether constructing this store may reach into UserDefaults and apply, revert, or
+        // re-import managed settings. True is the app's behaviour. Pass false to read a settings
+        // file without touching the process's managed state: without it, merely constructing a
+        // store for some other file un-manages the live one's keys and removes the bookkeeping
+        // blobs that would let anything put them back.
+        applyManagedSettings: Bool = true,
         onWatchedFileReload: @escaping @MainActor @Sendable (String) -> Void = { _ in }
     ) {
         self.primaryPath = primaryPath
@@ -126,11 +138,13 @@ final class CmuxSettingsFileStore {
         self.appearanceEnvironment = appearanceEnvironment
         self.passwordStore = passwordStore
         self.onWatchedFileReload = onWatchedFileReload
+        self.appliesManagedSettings = applyManagedSettings
         importedManagedDefaults = Self.loadImportedManagedDefaults()
         bootstrapPrimaryTemplateIfNeeded()
         reload(
             applyLiveDefaultSideEffects: false,
-            synchronizeManagedAppearanceTerminalTheme: false
+            synchronizeManagedAppearanceTerminalTheme: false,
+            applyManagedSettings: applyManagedSettings
         )
         guard startWatching else { return }
         watchers = ([primaryPath] + fallbackPaths).map { FileWatcher(path: $0) }
@@ -180,7 +194,8 @@ final class CmuxSettingsFileStore {
     @discardableResult
     private func reload(
         applyLiveDefaultSideEffects: Bool,
-        synchronizeManagedAppearanceTerminalTheme: Bool
+        synchronizeManagedAppearanceTerminalTheme: Bool,
+        applyManagedSettings shouldApplyManagedSettings: Bool = true
     ) -> Bool {
         let previousState = synchronized {
             (
@@ -191,16 +206,18 @@ final class CmuxSettingsFileStore {
             )
         }
         let resolved = resolveSettings()
-        applyManagedSettings(
-            snapshot: resolved,
-            importedManagedDefaults: previousState.importedManagedDefaults,
-            changedManagedDefaultKeys: newOrChangedManagedDefaultKeys(
-                previous: previousState.importedManagedDefaults,
-                next: resolved.managedUserDefaults
-            ),
-            applyLiveDefaultSideEffects: applyLiveDefaultSideEffects,
-            synchronizeManagedAppearanceTerminalTheme: synchronizeManagedAppearanceTerminalTheme
-        )
+        if shouldApplyManagedSettings {
+            applyManagedSettings(
+                snapshot: resolved,
+                importedManagedDefaults: previousState.importedManagedDefaults,
+                changedManagedDefaultKeys: newOrChangedManagedDefaultKeys(
+                    previous: previousState.importedManagedDefaults,
+                    next: resolved.managedUserDefaults
+                ),
+                applyLiveDefaultSideEffects: applyLiveDefaultSideEffects,
+                synchronizeManagedAppearanceTerminalTheme: synchronizeManagedAppearanceTerminalTheme
+            )
+        }
         synchronized {
             shortcutsByAction = resolved.shortcuts
             whenClausesByAction = resolved.whenClauses
@@ -287,6 +304,7 @@ final class CmuxSettingsFileStore {
     }
 
     private func reapplyManagedSettingsIfNeeded() {
+        guard appliesManagedSettings else { return }
         let managedState: (snapshot: ResolvedSettingsSnapshot, importedManagedDefaults: [String: ManagedSettingsValue])? = synchronized {
             guard !isApplyingManagedSettings else { return nil }
             if activeManagedUserDefaults.isEmpty && activeManagedCustomSettings.isEmpty {
