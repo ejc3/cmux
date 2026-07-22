@@ -126,7 +126,14 @@ final class AppDelegateShortcutRoutingTests: XCTestCase {
             isARepeat: false,
             keyCode: keyCode
         ) else {
-            fatalError("Failed to construct key event")
+            // Unreachable, and deliberately left as a trap rather than propagated. The only
+            // documented reason keyEvent(with:) returns nil is an event type that is not a key
+            // event, and the type is the literal .keyDown four lines above rather than a
+            // parameter, so no caller can reach this. Making it recoverable is not free: this
+            // helper is reached transitively by 114 functions in this file, so a throwing
+            // signature would rewrite all of their declarations and call sites to guard a branch
+            // that cannot be taken.
+            fatalError("NSEvent.keyEvent(with: .keyDown, ...) returned nil, which AppKit only does for a non-key event type")
         }
         return event
     }
