@@ -465,6 +465,11 @@ struct BrowserDiscardRestorePolicyCancelTests {
             backing: .buffered,
             defer: false
         )
+        // This test owns the window through ARC, so AppKit must not release it as well when the
+        // deferred close runs. Leaving the default on drops the last retain while other references
+        // to that address are still live, which aborts the test host rather than failing a test.
+        // Roughly forty other window-closing sites in cmuxTests do the same.
+        window.isReleasedWhenClosed = false
         defer {
             panel.resetInsecureHTTPAlertHooksForTesting()
             window.close()
