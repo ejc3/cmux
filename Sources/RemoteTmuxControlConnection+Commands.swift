@@ -95,7 +95,11 @@ extension RemoteTmuxControlConnection {
         // round-trip and needs no clock of its own.
         if livenessProbeOutstanding {
             record("liveness-unanswered")
-            resolveSuspectedStall(generation: generation, completion: completion)
+            // ABLATION (not for merge): the pre-fix decision, which treats a silent stream as a
+            // verdict without asking whether the host is reachable. Present so the new tests
+            // compile against the fixed API and can be watched to fail on the old behavior.
+            recoverFromStalledTransport()
+            completion?(false)
             return
         }
         livenessProbeOutstanding = true
