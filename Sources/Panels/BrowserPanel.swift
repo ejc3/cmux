@@ -383,8 +383,11 @@ final class BrowserProfileStore: ObservableObject {
         repository.displayName(for: id)
     }
 
-    func createProfile(named rawName: String) -> BrowserProfileDefinition? {
-        let result = repository.createProfile(named: rawName)
+    func createProfile(
+        named rawName: String,
+        markAsUsed: Bool = true
+    ) -> BrowserProfileDefinition? {
+        let result = repository.createProfile(named: rawName, markAsUsed: markAsUsed)
         mirrorPublishedState()
         return result
     }

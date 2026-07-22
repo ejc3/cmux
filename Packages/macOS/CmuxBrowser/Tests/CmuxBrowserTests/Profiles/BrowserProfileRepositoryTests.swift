@@ -117,6 +117,24 @@ struct BrowserProfileRepositoryTests {
         #expect(decoded.contains { $0.displayName == "Work" })
     }
 
+    /// Creating a profile must be able to leave the selection alone.
+    ///
+    /// The default marks the new profile used, which is what the create-then-select product flow
+    /// wants. Anything that only needs the profile to exist must be able to opt out, because
+    /// last-used is persisted and read back by every later resolution in the process.
+    @Test func createCanLeaveLastUsedAlone() {
+        let (repo, defaults) = makeRepository()
+        let originalLastUsed = repo.lastUsedProfileID
+
+        let created = repo.createProfile(named: "Scratch", markAsUsed: false)
+
+        #expect(created?.displayName == "Scratch")
+        #expect(repo.profiles.contains { $0.id == created?.id })
+        #expect(repo.lastUsedProfileID == originalLastUsed)
+        #expect(defaults.string(forKey: BrowserProfileRepository.lastUsedProfileDefaultsKey)
+                == originalLastUsed.uuidString)
+    }
+
     @Test func createRejectsEmptyName() {
         let (repo, _) = makeRepository()
         #expect(repo.createProfile(named: "   ") == nil)
