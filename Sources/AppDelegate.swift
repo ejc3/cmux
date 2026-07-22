@@ -1182,7 +1182,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Inverts the surface registry's legacy AppDelegate.shared reach-up:
         // the registry asks this delegate (via MainWindowRouteRetiring) to
         // sweep recoverable main-window routes after a surface unregisters.
-        GhosttyApp.terminalSurfaceRegistry.attachRouteRetirer(self)
+        // Install a resolver, not `self`: this runs during init, and a second delegate built later
+        // would otherwise take over the slot and orphan the live delegate's route sweep when it was
+        // released. Reading `AppDelegate.shared` on use always names the delegate in charge now.
+        GhosttyApp.terminalSurfaceRegistry.attachRouteRetirerResolver { AppDelegate.shared }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {

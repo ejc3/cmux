@@ -26,7 +26,16 @@ public final class TerminalSurfaceRegistry: TerminalSurfaceRegistering, Sendable
     nonisolated(unsafe) private var surfaceFocusPlacements: [UUID: TerminalSurfaceFocusPlacement] = [:]
     // SAFETY: every read and write is guarded by `lock`.
     nonisolated(unsafe) private var generation: UInt64 = 0
-    nonisolated(unsafe) private weak var routeRetirer: (any MainWindowRouteRetiring)?
+    /// Resolves the collaborator to notify when a surface unregisters.
+    ///
+    /// Deliberately a resolver rather than a stored reference. The retirer is the app delegate,
+    /// and the delegate installs itself here while it is being constructed, so a stored reference
+    /// records whichever delegate was built last. Any code that constructs a second delegate --
+    /// which tests do -- therefore replaced the live delegate's slot permanently, and because the
+    /// reference was weak it went nil for the rest of the process once that temporary was
+    /// released. Recoverable main-window routes then stopped being swept, silently. Resolving on
+    /// use asks who the delegate is now instead of remembering who it was.
+    nonisolated(unsafe) private var routeRetirerResolver: (@MainActor () -> (any MainWindowRouteRetiring)?)?
 
     /// Creates an empty registry.
     public init() {}
@@ -38,11 +47,17 @@ public final class TerminalSurfaceRegistry: TerminalSurfaceRegistering, Sendable
         return generation
     }
 
-    /// Attaches the collaborator notified when a surface unregisters, so
-    /// recoverable main-window routes without surfaces can be retired.
-    public func attachRouteRetirer(_ routeRetirer: any MainWindowRouteRetiring) {
+    /// Installs how to find the collaborator notified when a surface unregisters, so recoverable
+    /// main-window routes without surfaces can be retired.
+    ///
+    /// Pass a resolver that reads the current delegate, not a captured instance, so constructing
+    /// another delegate cannot orphan the sweep. Installing again replaces the resolver, which is
+    /// harmless when every caller resolves the same way.
+    public func attachRouteRetirerResolver(
+        _ resolve: @escaping @MainActor () -> (any MainWindowRouteRetiring)?
+    ) {
         lock.lock()
-        self.routeRetirer = routeRetirer
+        self.routeRetirerResolver = resolve
         lock.unlock()
     }
 
@@ -69,11 +84,13 @@ public final class TerminalSurfaceRegistry: TerminalSurfaceRegistering, Sendable
             surfaceFocusPlacements.removeValue(forKey: surfaceId)
         }
         generation &+= 1
-        let routeRetirer = routeRetirer
+        let resolveRouteRetirer = routeRetirerResolver
         lock.unlock()
 
         Task { @MainActor in
-            routeRetirer?.retireRecoverableMainWindowRoutesWithoutRegisteredTerminalSurfaces(
+            // Resolve here rather than above: the answer is only meaningful on the main actor, and
+            // taking it at use time is what makes a later delegate swap harmless.
+            resolveRouteRetirer?()?.retireRecoverableMainWindowRoutesWithoutRegisteredTerminalSurfaces(
                 reason: "terminalSurface.unregister"
             )
         }

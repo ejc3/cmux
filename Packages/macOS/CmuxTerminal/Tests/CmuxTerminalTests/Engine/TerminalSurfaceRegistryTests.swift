@@ -17,6 +17,17 @@ private final class FakeSurface: TerminalSurfacing {
     }
 }
 
+/// Holds whichever retirer is current, so a test can change the answer after installing the
+/// resolver. That is the difference the resolver buys over a stored reference.
+@MainActor
+private final class CurrentRetirerBox {
+    var retirer: (any MainWindowRouteRetiring)?
+
+    init(retirer: (any MainWindowRouteRetiring)?) {
+        self.retirer = retirer
+    }
+}
+
 @MainActor
 private final class RouteRetireRecorder: MainWindowRouteRetiring {
     private(set) var reasons: [String] = []
@@ -155,7 +166,7 @@ struct TerminalSurfaceRegistryTests {
     @Test func unregisterNotifiesRouteRetirerOnMainActor() async {
         let registry = TerminalSurfaceRegistry()
         let recorder = await RouteRetireRecorder()
-        registry.attachRouteRetirer(recorder)
+        registry.attachRouteRetirerResolver { recorder }
 
         let surface = FakeSurface()
         registry.register(surface)
@@ -164,6 +175,27 @@ struct TerminalSurfaceRegistryTests {
         await recorder.awaitFirstRetire()
         let reasons = await recorder.reasons
         #expect(reasons == ["terminalSurface.unregister"])
+    }
+
+    /// The resolver exists so that whoever installs later cannot orphan the sweep. Installing a
+    /// resolver that reads a mutable current value, then changing that value, must retire through
+    /// the new one -- which a stored (and weakly held) reference could not do.
+    @Test func unregisterResolvesTheRetirerAtUseTime() async {
+        let registry = TerminalSurfaceRegistry()
+        let first = await RouteRetireRecorder()
+        let second = await RouteRetireRecorder()
+        let box = await CurrentRetirerBox(retirer: first)
+        registry.attachRouteRetirerResolver { box.retirer }
+
+        await MainActor.run { box.retirer = second }
+
+        let surface = FakeSurface()
+        registry.register(surface)
+        registry.unregister(surface)
+        await second.awaitFirstRetire()
+
+        #expect(await second.reasons == ["terminalSurface.unregister"])
+        #expect(await first.reasons.isEmpty)
     }
 
     @Test func unregisterWithoutRetirerDoesNotCrash() {
