@@ -161,7 +161,9 @@ final class MainWindowFocusRedrawTests: XCTestCase {
     func testKeyRegainInvalidatesRootContentView() {
         _ = NSApplication.shared
 
-        let appDelegate = AppDelegate()
+        let temporaryAppDelegate = TemporaryAppDelegate()
+        defer { temporaryAppDelegate.restore() }
+        let appDelegate = temporaryAppDelegate.delegate
         let tabManager = TabManager(autoWelcomeIfNeeded: false)
         let windowId = appDelegate.registerMainWindowContextForTesting(tabManager: tabManager)
         defer {
@@ -228,7 +230,9 @@ final class AppDelegateWindowContextRoutingTests: XCTestCase {
 
     func testSynchronizeActiveMainWindowContextPrefersProvidedWindowOverStaleActiveManager() {
         _ = NSApplication.shared
-        let app = AppDelegate()
+        let temporaryAppDelegate = TemporaryAppDelegate()
+        defer { temporaryAppDelegate.restore() }
+        let app = temporaryAppDelegate.delegate
 
         let windowAId = UUID()
         let windowBId = UUID()
@@ -270,7 +274,9 @@ final class AppDelegateWindowContextRoutingTests: XCTestCase {
 
     func testSynchronizeActiveMainWindowContextFallsBackToActiveManagerWithoutFocusedWindow() {
         _ = NSApplication.shared
-        let app = AppDelegate()
+        let temporaryAppDelegate = TemporaryAppDelegate()
+        defer { temporaryAppDelegate.restore() }
+        let app = temporaryAppDelegate.delegate
 
         let windowAId = UUID()
         let windowBId = UUID()
@@ -314,7 +320,9 @@ final class AppDelegateWindowContextRoutingTests: XCTestCase {
 
     func testSynchronizeActiveMainWindowContextUsesRegisteredWindowEvenIfIdentifierMutates() {
         _ = NSApplication.shared
-        let app = AppDelegate()
+        let temporaryAppDelegate = TemporaryAppDelegate()
+        defer { temporaryAppDelegate.restore() }
+        let app = temporaryAppDelegate.delegate
 
         let windowId = UUID()
         let window = makeMainWindow(id: windowId)
@@ -340,7 +348,9 @@ final class AppDelegateWindowContextRoutingTests: XCTestCase {
 
     func testAddWorkspaceWithoutBringToFrontPreservesActiveWindowAndSelection() {
         _ = NSApplication.shared
-        let app = AppDelegate()
+        let temporaryAppDelegate = TemporaryAppDelegate()
+        defer { temporaryAppDelegate.restore() }
+        let app = temporaryAppDelegate.delegate
 
         let windowAId = UUID()
         let windowBId = UUID()
@@ -390,7 +400,9 @@ final class AppDelegateWindowContextRoutingTests: XCTestCase {
 
     func testApplicationOpenURLsAddsWorkspaceForDroppedFolderURL() throws {
         _ = NSApplication.shared
-        let app = AppDelegate()
+        let temporaryAppDelegate = TemporaryAppDelegate()
+        defer { temporaryAppDelegate.restore() }
+        let app = temporaryAppDelegate.delegate
 
         let windowId = UUID()
         let window = makeMainWindow(id: windowId)
@@ -441,7 +453,9 @@ final class AppDelegateWindowContextRoutingTests: XCTestCase {
 
     func testApplicationOpenURLsIgnoresBundleSelfPaths() throws {
         _ = NSApplication.shared
-        let app = AppDelegate()
+        let temporaryAppDelegate = TemporaryAppDelegate()
+        defer { temporaryAppDelegate.restore() }
+        let app = temporaryAppDelegate.delegate
 
         let windowId = UUID()
         let window = makeMainWindow(id: windowId)
@@ -494,7 +508,9 @@ final class AppDelegateLaunchServicesRegistrationTests: XCTestCase {
 
     func testScheduleLaunchServicesRegistrationDefersRegisterWork() {
         _ = NSApplication.shared
-        let app = AppDelegate()
+        let temporaryAppDelegate = TemporaryAppDelegate()
+        defer { temporaryAppDelegate.restore() }
+        let app = temporaryAppDelegate.delegate
 
         var scheduledWork: (@Sendable () -> Void)?
         var registerCallCount = 0

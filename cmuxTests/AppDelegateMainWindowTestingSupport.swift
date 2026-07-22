@@ -102,3 +102,41 @@ extension AppDelegate {
         }
     }
 }
+
+/// Installs a throwaway `AppDelegate` and puts the previous one back.
+///
+/// `AppDelegate.init()` assigns `AppDelegate.shared = self` as a construction side effect, so a
+/// test that builds one silently becomes the app delegate for every later test in the shared
+/// host. That delegate never received `applicationDidFinishLaunching`, has no window contexts,
+/// and holds `tabManager` weakly, so anything later resolving `AppDelegate.shared` gets a husk.
+///
+/// Restoring the active tab manager matters for the same reason
+/// `unregisterMainWindowContextForTesting` does it: a throwaway delegate's contexts re-point the
+/// shared controller's active manager, and leaving it foreign or nil breaks caller-context
+/// resolution in suites that run afterwards.
+///
+/// The surface registry's route retirer needs no restoring: it resolves the current delegate on
+/// use rather than storing the one that installed it.
+///
+/// Call `restore()` from a `defer` placed immediately after construction, before anything that
+/// can throw.
+@MainActor
+final class TemporaryAppDelegate {
+    let delegate: AppDelegate
+    private let previousDelegate: AppDelegate?
+    private let previousActiveTabManager: TabManager?
+    private var didRestore = false
+
+    init() {
+        previousDelegate = AppDelegate.shared
+        previousActiveTabManager = TerminalController.shared.activeTabManagerForCallerNotification()
+        delegate = AppDelegate()
+    }
+
+    func restore() {
+        guard !didRestore else { return }
+        didRestore = true
+        AppDelegate.shared = previousDelegate
+        TerminalController.shared.setActiveTabManager(previousActiveTabManager)
+    }
+}
