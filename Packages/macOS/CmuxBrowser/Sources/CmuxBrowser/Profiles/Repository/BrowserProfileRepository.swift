@@ -90,7 +90,17 @@ public final class BrowserProfileRepository {
     /// Creates a new non-default profile, persists, and marks it used.
     /// - Parameter rawName: The requested name; trimmed of surrounding whitespace.
     /// - Returns: The created profile, or `nil` when the trimmed name is empty.
-    public func createProfile(named rawName: String) -> BrowserProfileDefinition? {
+    /// Creates a non-default profile and persists.
+    ///
+    /// - Parameter markAsUsed: whether the new profile also becomes the last-used one. True keeps
+    ///   the create-then-select behaviour every product caller wants. Pass false when the profile
+    ///   is being created for its own sake, so that creating one does not silently change which
+    ///   profile everything else resolves to; without this there is no way to add a profile
+    ///   without moving that selection, which in a shared process leaks into whatever runs next.
+    public func createProfile(
+        named rawName: String,
+        markAsUsed: Bool = true
+    ) -> BrowserProfileDefinition? {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return nil }
         let profile = BrowserProfileDefinition(
@@ -107,7 +117,9 @@ public final class BrowserProfileRepository {
             return $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
         persist()
-        noteUsed(profile.id)
+        if markAsUsed {
+            noteUsed(profile.id)
+        }
         return profile
     }
 
