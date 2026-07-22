@@ -755,7 +755,17 @@ class TerminalController {
         self.tabManager = tabManager
     }
 
-    func activeTabManagerForCallerNotification() -> TabManager? { tabManager }
+    /// The tab manager to route a caller-initiated notification through.
+    ///
+    /// Falls back to the focused scriptable main window, the way `v2ResolveTabManager` and its
+    /// siblings do. Without the fallback this returns nil whenever `tabManager` happens to be
+    /// unset, and the caller-notification path turns that into a hard "unavailable" error rather
+    /// than the degraded lookup every neighbouring resolver performs. A registered window is
+    /// perfectly usable for delivering a notification, so refusing on a nil field is stricter
+    /// than the feature needs.
+    func activeTabManagerForCallerNotification() -> TabManager? {
+        tabManager ?? AppDelegate.shared?.currentScriptableMainWindow()?.tabManager
+    }
 
     // MARK: - Process Ancestry Check
 
