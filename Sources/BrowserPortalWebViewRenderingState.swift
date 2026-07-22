@@ -165,6 +165,23 @@ extension WKWebView {
 #endif
     }
 
+    /// Arms the reveal-time rendering-state reattach without running WebKit's hide selectors.
+    ///
+    /// A tab or workspace switch hides the portal slot and must not fire `_exitInWindow`, which
+    /// raises `visibilitychange` and can reload the page. WebKit still stops rendering the hidden
+    /// slot, though, so the next reveal has to re-enter or it paints the layer tree frozen at hide
+    /// time. Arming the flag here keeps those two concerns separate.
+    func browserPortalArmRenderingStateReattachForReveal(reason: String) {
+        guard !cmuxIsWebInspectorObject(self) else { return }
+        browserPortalNeedsRenderingStateReattach = true
+#if DEBUG
+        cmuxDebugLog(
+            "browser.portal.webview.reattach.arm web=\(browserPortalRenderingStateDebugToken(self)) " +
+            "reason=\(reason)"
+        )
+#endif
+    }
+
     @discardableResult
     func browserPortalApplyFirstSizedRevealGeometryNudgeIfNeeded(
         reason: String,

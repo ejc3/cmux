@@ -3203,6 +3203,17 @@ final class WindowBrowserPortal: NSObject {
                     primaryWebView: webView,
                     reason: reason
                 )
+            } else if !containerView.isHidden {
+                // No exit selectors on this path, but the slot still stops rendering, so the next
+                // reveal must re-enter WebKit rather than paint what it froze while hidden. The
+                // notify above is the only other thing that arms this, so without it a reveal that
+                // changes no frame does nothing at all.
+                for webKitSubview in hostedWebKitSubviews(
+                    in: containerView,
+                    primaryWebView: webView
+                ) {
+                    webKitSubview.browserPortalArmRenderingStateReattachForReveal(reason: reason)
+                }
             }
             containerView.isHidden = true
         }
