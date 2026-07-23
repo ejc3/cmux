@@ -4317,6 +4317,10 @@ final class BrowserPanel: Panel, ObservableObject {
             hiddenWebViewDiscardManager.updateRestoredSessionRenderIntent(nil)
             currentURL = initialRequest.url
             shouldRenderWebView = renderInitialNavigation
+            // The observer on shouldRenderWebView only reclassifies when the value
+            // changes, and a render-deferred panel assigns false over false, so
+            // classify the pending URL here instead of leaving the declared .newTab.
+            refreshWebViewLifecycleState()
             guard renderInitialNavigation else { return }
             if let url = initialRequest.url,
                insecureHTTPBypassHostOnce == nil,
@@ -4336,6 +4340,10 @@ final class BrowserPanel: Panel, ObservableObject {
             hiddenWebViewDiscardManager.updateRestoredSessionRenderIntent(nil)
             currentURL = url
             shouldRenderWebView = renderInitialNavigation
+            // The observer on shouldRenderWebView only reclassifies when the value
+            // changes, and a render-deferred panel assigns false over false, so
+            // classify the pending URL here instead of leaving the declared .newTab.
+            refreshWebViewLifecycleState()
             guard renderInitialNavigation else { return }
             if adoptedPrewarmedWebView {
                 // Already navigated while hidden; record for recovery paths.
