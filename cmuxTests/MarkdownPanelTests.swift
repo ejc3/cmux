@@ -301,7 +301,7 @@ final class MarkdownPanelTests: XCTestCase {
         XCTAssertTrue(reopenedMarkdownPanels.contains { ObjectIdentifier($0) == originalMarkdownPanelID })
     }
 
-    func testOpenMarkdownPanelReloadsWhenFileChangesOnDisk() async throws {
+    func testOpenMarkdownPanelReloadsWhenFileChangesOnDisk() throws {
         let fileManager = FileManager.default
         let directoryURL = fileManager.temporaryDirectory
             .appendingPathComponent("cmux-markdown-panel-tests-\(UUID().uuidString)", isDirectory: true)
@@ -329,7 +329,7 @@ final class MarkdownPanelTests: XCTestCase {
 
         try updatedContent.write(to: fileURL, atomically: true, encoding: .utf8)
 
-        await fulfillment(of: [reloaded], timeout: 3)
+        wait(for: [reloaded], timeout: 3)
         XCTAssertEqual(panel.content, updatedContent)
         XCTAssertEqual(panel.textContent, updatedContent)
         XCTAssertFalse(panel.isDirty)
