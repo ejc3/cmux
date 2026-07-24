@@ -314,7 +314,6 @@ final class MarkdownPanelTests: XCTestCase {
         try originalContent.write(to: fileURL, atomically: true, encoding: .utf8)
 
         let panel = MarkdownPanel(workspaceId: UUID(), filePath: fileURL.path)
-        defer { panel.close() }
 
         XCTAssertEqual(panel.content, originalContent)
         XCTAssertFalse(panel.isFileUnavailable)
@@ -325,7 +324,7 @@ final class MarkdownPanelTests: XCTestCase {
                 reloaded.fulfill()
             }
         }
-        defer { cancellable.cancel() }
+
 
         try updatedContent.write(to: fileURL, atomically: true, encoding: .utf8)
 
@@ -333,6 +332,11 @@ final class MarkdownPanelTests: XCTestCase {
         XCTAssertEqual(panel.content, updatedContent)
         XCTAssertEqual(panel.textContent, updatedContent)
         XCTAssertFalse(panel.isDirty)
+
+        // Tear down inside the async body rather than from `defer` at scope exit, so the panel's
+        // unstructured MainActor watcher Task is cancelled while this function is still running.
+        cancellable.cancel()
+        panel.close()
     }
 
     func testMarkdownRendererSessionReusesCoordinatorAcrossViewRecreation() {
