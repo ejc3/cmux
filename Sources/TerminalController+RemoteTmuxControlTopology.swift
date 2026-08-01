@@ -92,7 +92,23 @@ extension TerminalController {
 
         let targetIndex: Int
         if let index = inputs.index {
-            targetIndex = index
+            // `index` is the surface's requested FINAL position among its
+            // pane's tabs. Bonsplit's reorderTab takes a drop-gap index in the
+            // pre-removal tab list — a rightward move needs +1, and source+1
+            // is "drop after itself", which bonsplit treats as a successful
+            // no-op — so convert exactly like reorderSurface(panelId:by:)
+            // does, or every rightward reorder lands one tab short of the
+            // requested index while still reporting success.
+            guard let sourceTabID = ws.surfaceIdFromPanelId(sourcePanelID) else {
+                return .surfaceNotFound(surfaceID)
+            }
+            let tabs = ws.bonsplitController.tabs(inPane: sourcePane)
+            guard !tabs.isEmpty,
+                  let currentIndex = tabs.firstIndex(where: { $0.id == sourceTabID }) else {
+                return .surfaceNotFound(surfaceID)
+            }
+            let finalIndex = min(max(index, 0), tabs.count - 1)
+            targetIndex = finalIndex > currentIndex ? finalIndex + 1 : finalIndex
         } else if let beforeSurfaceID = inputs.beforeSurfaceID {
             guard let anchorPanelID = ws.controlReorderContainerPanelID(for: beforeSurfaceID),
                   let anchorPane = ws.paneId(forPanelId: anchorPanelID),
