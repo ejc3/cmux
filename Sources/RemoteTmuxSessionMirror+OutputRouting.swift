@@ -40,7 +40,7 @@ extension RemoteTmuxSessionMirror {
            pendingPaneSeedKinds[paneId] == .fullHistory
         {
             let nextCount = (pendingPaneSeedByteCounts[paneId] ?? 0) + renderedBytes.count
-            guard nextCount <= RemoteTmuxControlConnection.maximumPendingPaneSeedDeliveryBytes else {
+            guard nextCount <= perPanePendingSeedByteCeiling else {
                 deferFullPaneReseed(
                     paneId: paneId,
                     event: "pane-consumer-visible-after-full-overflow"
@@ -76,10 +76,7 @@ extension RemoteTmuxSessionMirror {
             routeCleanedOutput(paneId: paneId, data: renderedBytes)
             return
         }
-        // One seed larger than a whole delivery budget means the transport handed
-        // over more than its own per-seed cap allows. Repair it the same way as
-        // every other over-budget case, by dropping it and recapturing this pane.
-        guard renderedBytes.count <= RemoteTmuxControlConnection.maximumPendingPaneSeedDeliveryBytes else {
+        guard renderedBytes.count <= perPanePendingSeedByteCeiling else {
             deferFullPaneReseed(paneId: paneId, event: "pane-consumer-seed-overflow")
             return
         }
@@ -159,7 +156,7 @@ extension RemoteTmuxSessionMirror {
             return
         }
         let nextCount = (pendingPaneSeedByteCounts[paneId] ?? 0) + data.count
-        guard nextCount <= RemoteTmuxControlConnection.maximumPendingPaneSeedDeliveryBytes else {
+        guard nextCount <= perPanePendingSeedByteCeiling else {
             deferFullPaneReseed(paneId: paneId, event: "pane-consumer-live-overflow")
             return
         }
@@ -249,6 +246,21 @@ extension RemoteTmuxSessionMirror {
         releasePaneSeedReadinessSignalsIfIdle()
     }
 
+    /// How many retained bytes one pane may hold.
+    ///
+    /// The static is a per-pane allowance: one maximum snapshot plus its bounded live catch-up. The
+    /// mirror's own budget has to bound it as well, or a single pane is allowed more than the whole
+    /// mirror is — which is the case today, because the mirror-wide default is exactly twice the
+    /// per-pane static. One retaining pane therefore always crosses the per-pane line first, and the
+    /// mirror-wide check only becomes reachable with three panes retaining at once.
+    ///
+    /// At the shipped default this changes nothing, since `min(x, 2x) == x`. It also makes the branch
+    /// reachable from a test for the first time: the seed tests inject a small
+    /// ``RemoteTmuxSessionMirror/pendingPaneSeedByteLimit`` that the per-pane comparison ignored.
+    private var perPanePendingSeedByteCeiling: Int {
+        min(RemoteTmuxControlConnection.maximumPendingPaneSeedDeliveryBytes, pendingPaneSeedByteLimit)
+    }
+
     private func retainPaneSeedReadinessSignalsIfNeeded() {
         guard paneSeedReadinessObserverTokens.isEmpty else { return }
         let center = NotificationCenter.default
@@ -325,20 +337,6 @@ extension RemoteTmuxSessionMirror {
         handlePaneSeedReadiness(paneId: paneId)
     }
 
-    /// Gives up on the bytes retained for one pane and takes a fresh authoritative
-    /// capture of it instead. Every over-budget path ends here, because once the
-    /// mirror drops any of a pane's retained bytes what it still holds is no longer
-    /// a faithful prefix of that pane's stream, and only a full-history capture can
-    /// put the surface back on the stream. The capture waits for the surface to
-    /// reach its published grid (see ``startDeferredFullPaneReseedIfReady``), and
-    /// retries while the connection is live if the transport refuses to start one.
-    ///
-    /// The repair stops at the pane on purpose. These budgets are the mirror's own
-    /// retention accounting, so an overflow says nothing about the health of the
-    /// control stream, and on a host whose sessions share one stream, restarting it
-    /// would freeze every other session's mirror over one pane's byte budget. A
-    /// stream that really is unusable still reconnects from the transport's own
-    /// guards in ``RemoteTmuxControlConnection`` rather than from here.
     private func deferFullPaneReseed(paneId: Int, event: String) {
         connection.record("\(event) %\(paneId)")
         deferredFullPaneReseeds.insert(paneId)

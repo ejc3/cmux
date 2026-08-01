@@ -9,11 +9,8 @@ import Foundation
 @MainActor
 struct RemoteTmuxSessionObservers {
     var onPaneOutput: ((_ paneId: Int, _ data: Data) -> Void)?
-    /// Delivers an authoritative pane snapshot together with the ordered live
-    /// output that brackets its capture boundary. A consumer that never receives
-    /// this renders only the live stream, so a pane it mounted mid-session — or
-    /// re-mounted after a reconnect — stays blank until something happens to
-    /// redraw it.
+    /// An authoritative pane snapshot and the live output ordered after it. Delivered separately from
+    /// `onPaneOutput` because the consumer has to hold it until its surface grid can accept it.
     var onPaneSeed: ((_ paneId: Int, _ seed: RemoteTmuxPaneSeed) -> Void)?
     var onPaneCwd: ((_ paneId: Int, _ path: String) -> Void)?
     var onPaneReflow: ((_ paneId: Int, _ noReflow: Bool) -> Void)?
@@ -25,18 +22,33 @@ struct RemoteTmuxSessionObservers {
     var onReconnectReady: (() -> Void)?
     var onExit: (() -> Void)?
     var onConnectionStateChanged: ((RemoteTmuxConnectionState) -> Void)?
+    /// Fires when a reconnect stopped because the host wants interactive authentication the
+    /// pipe-backed reconnect cannot service. The payload is the `ssh` argv to run under a tty.
+    ///
+    /// Returns `true` only when a login was actually presented: returning `true` merely for being
+    /// subscribed suppresses the caller's retry fallback and strands the host.
+    var onAuthRequired: ((_ sshArgv: [String]) -> Bool)?
 
+    /// Every member is required at the call site on purpose.
+    ///
+    /// With defaults, a member added here silently became `nil` at every existing construction and
+    /// went nowhere — which is exactly how `onPaneSeed` reached no one and `onReconnectReady` was
+    /// declared and forwarded by nobody. Requiring each one turns "someone added an event" into a
+    /// compile error at the places that have to decide about it. Whether the channel then forwards,
+    /// scopes, or deliberately drops it is checked by the disposition table in
+    /// `RemoteTmuxMultiplexFuzzTests`.
     init(
-        onPaneOutput: ((_ paneId: Int, _ data: Data) -> Void)? = nil,
-        onPaneSeed: ((_ paneId: Int, _ seed: RemoteTmuxPaneSeed) -> Void)? = nil,
-        onPaneCwd: ((_ paneId: Int, _ path: String) -> Void)? = nil,
-        onPaneReflow: ((_ paneId: Int, _ noReflow: Bool) -> Void)? = nil,
-        onActivePaneChanged: ((_ windowId: Int, _ paneId: Int) -> Void)? = nil,
-        onSessionChanged: ((_ oldName: String, _ newName: String) -> Void)? = nil,
-        onTopologyChanged: (() -> Void)? = nil,
-        onReconnectReady: (() -> Void)? = nil,
-        onExit: (() -> Void)? = nil,
-        onConnectionStateChanged: ((RemoteTmuxConnectionState) -> Void)? = nil
+        onPaneOutput: ((_ paneId: Int, _ data: Data) -> Void)?,
+        onPaneSeed: ((_ paneId: Int, _ seed: RemoteTmuxPaneSeed) -> Void)?,
+        onPaneCwd: ((_ paneId: Int, _ path: String) -> Void)?,
+        onPaneReflow: ((_ paneId: Int, _ noReflow: Bool) -> Void)?,
+        onActivePaneChanged: ((_ windowId: Int, _ paneId: Int) -> Void)?,
+        onSessionChanged: ((_ oldName: String, _ newName: String) -> Void)?,
+        onTopologyChanged: (() -> Void)?,
+        onReconnectReady: (() -> Void)?,
+        onExit: (() -> Void)?,
+        onConnectionStateChanged: ((RemoteTmuxConnectionState) -> Void)?,
+        onAuthRequired: ((_ sshArgv: [String]) -> Bool)?
     ) {
         self.onPaneOutput = onPaneOutput
         self.onPaneSeed = onPaneSeed
@@ -48,6 +60,7 @@ struct RemoteTmuxSessionObservers {
         self.onReconnectReady = onReconnectReady
         self.onExit = onExit
         self.onConnectionStateChanged = onConnectionStateChanged
+        self.onAuthRequired = onAuthRequired
     }
 }
 
@@ -64,6 +77,12 @@ struct RemoteTmuxSessionObservers {
 protocol RemoteTmuxSessionSource: AnyObject {
     /// Live transport state (host-global under a shared connection).
     var connectionState: RemoteTmuxConnectionState { get }
+    /// Notes a diagnostic event against this session.
+    ///
+    /// The ring behind it is host-global when one stream carries several sessions, so an
+    /// implementation that shares a stream scopes the text to its own session — otherwise two
+    /// sessions' pane events are indistinguishable in the same ring.
+    func record(_ event: String)
     /// `true` once the session has permanently ended.
     var exited: Bool { get }
     /// The tmux session id (`$N`), stable across renames, once known.
@@ -99,6 +118,16 @@ protocol RemoteTmuxSessionSource: AnyObject {
 
     /// Releases this mirror's hold on its transport (observer slots, cached process
     /// ownership). This never touches sibling sessions that share the same transport.
+    /// Resumes a stream parked waiting for the user to authenticate.
+    ///
+    /// On the protocol because a login unblocks whatever carries the session, and for a
+    /// multiplexed host that is the shared view stream rather than this session's own. Resolving
+    /// this by downcasting to the concrete connection at the call site would have left multiplexed
+    /// hosts silently never resuming after a successful login.
+    ///
+    /// A no-op unless the stream is actually parked, so it cannot disturb a healthy one.
+    func resumeAfterInteractiveAuth()
+
     func releaseMirror()
     /// Ends the remote session (`kill == true`) or just this mirror's attachment
     /// (`kill == false`) using only channels the concrete transport itself can use.
@@ -111,11 +140,9 @@ protocol RemoteTmuxSessionSource: AnyObject {
     /// so a state machine can anchor on the resolution instead of a timer.
     @discardableResult func sendTracked(_ command: String, completion: @escaping (Bool) -> Void) -> Bool
     /// Replaces a pane's visible screen from a fresh capture (home+clear+rows),
-    /// used to repaint after a resize the terminal didn't reflow. Returns the id of
-    /// the pane-seed transaction the repaint runs under, or nil when no transaction
-    /// started — the repaint coalesced into one already in flight, or the transport
-    /// refused it.
-    @discardableResult func repaintPaneVisibleScreen(paneId: Int) -> UUID?
+    /// used to repaint after a resize the terminal didn't reflow.
+    @discardableResult
+    func repaintPaneVisibleScreen(paneId: Int) -> UUID?
     /// Drops cached window-size claims for windows no longer live (sizing GC).
     func retainWindowSizeClaims(for liveWindowIDs: Set<Int>)
     /// Drops the cached window-size claim for a single window (e.g. on its close).
@@ -128,14 +155,9 @@ protocol RemoteTmuxSessionSource: AnyObject {
     @discardableResult func sendWindowReorder(_ commands: [String], verification: ((Bool) -> Void)?) -> Bool
     /// Forwards typed input to a pane.
     @discardableResult func sendKeys(paneId: Int, data: Data) -> Bool
-    /// Replays a pane's captured contents into a freshly-mounted surface, clearing
-    /// that surface's scrollback first when the capture carries the pane's own
-    /// history. Returns the id of the pane-seed transaction, or nil when no seed
-    /// started; a caller that still owes the surface a seed (the deferred full
-    /// reseed) retries on that nil rather than leaving the pane blank.
-    /// `clearScrollback` has no default here because a protocol requirement can't
-    /// carry one, so every call through the source names it.
-    @discardableResult func seedPane(paneId: Int, clearScrollback: Bool) -> UUID?
+    /// Replays a pane's captured contents into a freshly-mounted surface.
+    @discardableResult
+    func seedPane(paneId: Int, clearScrollback: Bool) -> UUID?
     /// Ends per-pane cwd / reflow / header subscriptions when a pane's mirror goes away.
     func unsubscribePanePath(paneId: Int)
     func unsubscribePaneReflow(paneId: Int)
@@ -152,15 +174,6 @@ protocol RemoteTmuxSessionSource: AnyObject {
     func queryPaneActivity(paneId: Int, completion: @escaping ([Int: RemoteTmuxPaneForegroundState]?) -> Void)
     /// Pastes text into a pane.
     @discardableResult func pastePane(paneId: Int, text: String) -> Bool
-
-    /// Appends one event to the transport's diagnostic ring, the buffer
-    /// `remote.tmux.state` reads back. Consumer-side events belong in the same
-    /// ordered buffer as the transport's own, because reading a seed failure means
-    /// following one pane across the boundary between them, and a separate consumer
-    /// log would lose the interleaving that shows which side gave up first. A shared
-    /// stream carries several sessions' events, so an implementation serving one
-    /// session of many tags them with its identity.
-    func record(_ event: String)
 }
 
 /// GA: one control connection *is* one session, so the connection is its own source.
@@ -186,7 +199,17 @@ extension RemoteTmuxControlConnection: RemoteTmuxSessionSource {
             onTopologyChanged: observers.onTopologyChanged,
             onReconnectReady: observers.onReconnectReady,
             onExit: observers.onExit,
-            onConnectionStateChanged: observers.onConnectionStateChanged
+            onConnectionStateChanged: observers.onConnectionStateChanged,
+            onAuthRequired: observers.onAuthRequired
         )
+    }
+}
+
+extension RemoteTmuxSessionSource {
+    /// `clearScrollback: true` is the default the concrete connection declares; a protocol cannot
+    /// carry a default argument, so it lives here instead.
+    @discardableResult
+    func seedPane(paneId: Int) -> UUID? {
+        seedPane(paneId: paneId, clearScrollback: true)
     }
 }

@@ -9,13 +9,16 @@ import Foundation
 /// produced by ``RemoteTmuxLinkedViewPlan``.
 ///
 /// Lifecycle:
-/// 1. `start()` — BEFORE attaching, run sequential one-shots over the shared
-///    master (allowed: no `-CC` holds the session yet) to discover existing
-///    sessions, garbage-collect our own stale views, and create the owned view at
-///    an explicit size. Then attach the single `-CC` client to the view.
+/// 1. `start()` — attach the single `-CC` client with `new-session -A -s <view> -x -y`,
+///    which attaches the view when it exists and creates it at the right size when it
+///    does not. Nothing runs before it: opening the host costs ONE connection, which is
+///    what a transport that authenticates per connection makes visible — every extra
+///    channel is another 2FA prompt.
 /// 2. On connect / every `%topology` change — `reconcile()` queries the server
 ///    OVER the control stream (a second one-shot ssh would be refused) and applies
-///    link/unlink actions, then publishes the regrouped workspaces.
+///    link/unlink actions, then publishes the regrouped workspaces. The first reconcile
+///    also finishes bringing the view up: it stamps the ownership options, reads the
+///    placeholder + already-linked windows, and reaps our own stale views.
 /// 3. `newWorkspace()` — create a detached session over the stream and reconcile,
 ///    so it links in and surfaces as a new workspace ("new workspace rides the
 ///    linking").
@@ -28,17 +31,55 @@ final class RemoteTmuxViewConnection {
     private(set) var connection: RemoteTmuxControlConnection?
     /// The current regrouped workspaces (home session → ordered window ids).
     private(set) var workspaces: [RemoteTmuxLinkedWorkspaceModel.Workspace] = []
+    /// Called when the stream is found waiting for credentials, so the verdict can be stored somewhere
+    /// that outlives this view — the teardown discards it before the attach reports anything.
+    var onAwaitingCredentials: (() -> Void)?
+
+    /// Whether the stream this view last carried ended waiting for credentials.
+    ///
+    /// Latched rather than read on demand: by the time a caller gives up waiting, `connection` is
+    /// already nil, so asking it what happened returns nothing. Measured — an earlier version of this
+    /// check read through the live connection and found `conn=nil` every time.
+    private(set) var lastStreamAwaitedCredentials = false
     /// Fires after `workspaces` changes (the controller rebuilds cmux workspaces).
     var onWorkspacesChanged: (() -> Void)?
     /// Fires when the view connection permanently ends.
     var onEnded: (() -> Void)?
 
-    private let transport: RemoteTmuxSSHTransport
+    /// A parked shared stream needs a login, and the payload is the `ssh` argv to run under a tty.
+    ///
+    /// One stream carries every session on the host, so one login unblocks all of them — which is
+    /// why this is a single host-level callback rather than a per-session fan-out. Returns `true`
+    /// only if a login was actually presented; reporting `true` merely for being subscribed would
+    /// suppress the connection's retry fallback and strand the host.
+    var onAuthRequired: ((_ sshArgv: [String]) -> Bool)?
+
     private let initialCols: Int
     private let initialRows: Int
     /// Window ids cmux has itself linked into the view (ownership for safe unlink).
     private var ownedWindowIds: Set<String> = []
     private var placeholderWindowId: String?
+    /// Whether the over-the-stream view bringup has completed: the ownership options are
+    /// stamped (each write acknowledged) and ``placeholderWindowId``/``ownedWindowIds``
+    /// have been read back.
+    ///
+    /// Cleared whenever the stream leaves `.connected`, so the next connect re-runs the
+    /// bringup. Server state does survive a transport's own internal reconnect — which
+    /// produces no state change here, so the latch holds across it — but a cmux-driven
+    /// respawn can find a view that was killed during the outage and recreated empty by
+    /// the re-attach. The bringup is three constant option writes plus one query, so
+    /// re-running it costs a round trip and removes the dependence on which mode the
+    /// reconnect path happens to spawn with.
+    private var didBootstrapView = false
+    /// Bringup attempts spent since the last connect, so a view that cannot be stamped fails
+    /// visibly instead of retrying forever. Reset by a bringup that lands and by a fresh connect.
+    private var bringupRetries = 0
+    private static let maxBringupRetries = 3
+    /// Which bringup attempt the ownership writes below belong to, so a late
+    /// acknowledgement from an abandoned attempt cannot answer the current one.
+    private var bootstrapAttempt = 0
+    /// How many of the current attempt's ownership writes tmux acknowledged with `%end`.
+    private var bootstrapWritesAcknowledged = 0
     private var observerToken: RemoteTmuxControlConnection.ObserverToken?
     /// Serializes reconciles so overlapping topology events don't interleave.
     /// Set by ``stop()`` so a reconcile/handleEnded already queued on the @MainActor
@@ -74,26 +115,32 @@ final class RemoteTmuxViewConnection {
     init(
         host: RemoteTmuxHost,
         ownerId: String,
-        transport: RemoteTmuxSSHTransport,
         initialCols: Int = 120,
         initialRows: Int = 40
     ) {
         self.host = host
         self.view = RemoteTmuxViewSession(ownerId: ownerId)
-        self.transport = transport
         self.initialCols = initialCols
         self.initialRows = initialRows
     }
 
     // MARK: - Lifecycle
 
-    /// Ensures the owned view exists (creating it and GC'ing our stale views via
-    /// pre-attach one-shots), then attaches the single `-CC` client and runs the
-    /// first reconcile. Throws if the view can't be created or the stream can't attach.
-    func start() async throws {
-        try await ensureViewSession()
+    /// Attaches the single `-CC` client to the view, creating the view in the same command
+    /// when the host does not have it yet. Throws if the stream can't launch.
+    ///
+    /// No pre-attach discovery, and that is the point: the stream opens with no prior
+    /// knowledge of the host, so the whole attach is one connection. `new-session -A -s`
+    /// is what makes it possible — plain `attach-session` needs the view to exist and
+    /// `new-session -t` would create a session grouped with another one's windows.
+    ///
+    /// Nothing here suspends any more: the view's remaining bringup is queries on the stream
+    /// this opens, and those run from the first `reconcile()`.
+    func start() throws {
         let conn = RemoteTmuxControlConnection(
-            host: host, sessionName: view.sessionName, createIfMissing: false)
+            host: host,
+            sessionName: view.sessionName,
+            attachMode: .attachOrCreateSized(columns: initialCols, rows: initialRows))
         conn.isSharedViewStream = true
         observerToken = conn.addObserver(
             onTopologyChanged: { [weak self] in self?.scheduleReconcile() },
@@ -110,7 +157,18 @@ final class RemoteTmuxViewConnection {
                     // session the user closed (it only flips true once a real workspace
                     // surfaced), so this can't resurrect closed work.
                     self.didBootstrapEmptyHost = false
+                    // Re-run the view bringup on the next connect. The view we stamped may
+                    // not be the view we come back to: it can be killed during the outage
+                    // and recreated by the re-attach, and an unstamped view classifies as
+                    // not ours.
+                    self.didBootstrapView = false
+                    // A fresh connect gets a fresh budget; the old stream's refusals say nothing
+                    // about whether this one will take the writes.
+                    self.bringupRetries = 0
                 }
+            },
+            onAuthRequired: { [weak self] sshArgv in
+                self?.onAuthRequired?(sshArgv) ?? false
             })
         try conn.start()
         conn.setClientSize(columns: initialCols, rows: initialRows)
@@ -121,7 +179,15 @@ final class RemoteTmuxViewConnection {
         isStopped = true
         if let observerToken { connection?.removeObserver(observerToken); self.observerToken = nil }
         connection?.unsubscribeSessionDigest()
-        connection?.stop()
+        // Ask tmux to drop this client before the transport goes away, for the same reason the
+        // per-session teardown does: over a transport whose remote half outlives its client, killing
+        // the local process leaves the control client attached to the session forever. The view is
+        // ONE client for every session on the host, so leaking it here strands the whole host rather
+        // than a single mirror. `detachThenStop` degrades to a plain stop when the transport does not
+        // need it or the stream is already past `.connected`, so this is safe on every path that
+        // stops a view.
+        latchCredentialVerdict()
+        connection?.detachThenStop()
         connection = nil
         resolveFirstWorkspacesWaiters(false)
     }
@@ -308,43 +374,123 @@ final class RemoteTmuxViewConnection {
         return quoted("=" + ref.name)
     }
 
-    // MARK: - View creation (pre-attach one-shots)
+    // MARK: - View bringup (over the live stream)
 
-    private func ensureViewSession() async throws {
-        // List existing sessions to find our stale views and whether ours exists.
-        let listOut = await runOneShot(["list-sessions", "-F", RemoteTmuxViewSession.listFormat])
-        let rows = RemoteTmuxViewSession.parseRows(listOut)
-        for stale in rows.filter({ view.isOwnStaleView($0) }) {
-            _ = await runOneShot(["kill-session", "-t", stale.name])
+    /// Finishes bringing the view up on the stream that just attached it: stamps the
+    /// ownership options, then reads the view's windows to recover the placeholder and the
+    /// windows a previous cmux run left linked.
+    ///
+    /// Runs from the first `reconcile()` rather than from `start()` because it needs the
+    /// control stream, and `reconcile()` is where the stream's serialization already lives.
+    /// Ordering inside one reconcile is what makes it correct: the option writes are
+    /// enqueued before that reconcile's `list-sessions`, and tmux answers commands in the
+    /// order it received them, so the plan reads a view already tagged as ours.
+    ///
+    /// The writes are tracked to their `%begin`/`%end` blocks rather than fired and
+    /// forgotten, because a write that is dropped or errors while the query still answers
+    /// is worse than no bringup at all: the view reads back with `@cmux_view` unset, so it
+    /// does not classify as ours, and the same reconcile then links every window into the
+    /// view a SECOND time (measured on a live host: window `@18` linked at index 6 and
+    /// again at index 8) and offers the session this client is attached to as a stale view
+    /// to reap.
+    ///
+    /// Returns false when a write could not be sent, a write was not acknowledged, or the
+    /// window query got no answer — leaving the latch clear so the next reconcile retries
+    /// instead of planning against a view that reads as somebody else's.
+    private func bootstrapViewOverStream(_ conn: RemoteTmuxControlConnection) async -> Bool {
+        bootstrapAttempt += 1
+        let attempt = bootstrapAttempt
+        bootstrapWritesAcknowledged = 0
+        let writes = view.setOptionCommands()
+        for command in writes {
+            guard conn.sendTracked(command, completion: { [weak self] accepted in
+                guard let self, self.bootstrapAttempt == attempt, accepted else { return }
+                self.bootstrapWritesAcknowledged += 1
+            }) else { return false }
         }
-        if !rows.contains(where: { view.isOwnView($0) }) {
-            for argv in view.createArgvs(cols: initialCols, rows: initialRows) {
-                _ = await runOneShot(argv)
-            }
-        }
-        // Record the view's placeholder window so reconcile never unlinks it.
-        let phOut = await runOneShot(["list-windows", "-t", view.sessionName, "-F", "#{window_id}"])
-        let viewWindowIds = phOut
-            .split(whereSeparator: \.isNewline)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        placeholderWindowId = viewWindowIds.first
-        // Adopt windows already linked into a reused view (from a prior cmux run) as
-        // owned, so reconcile can unlink any whose real session has since died —
-        // otherwise dead linked copies accumulate in the persistent view session.
-        ownedWindowIds = Set(viewWindowIds.dropFirst())
+        guard let lines = await reconcileListQuery(
+            conn,
+            "list-windows -t \(quoted(view.sessionName)) -F '#{window_id} #{window_linked}'"
+        ) else { return false }
+        // No separate wait for the writes: tmux answers commands in the order it received
+        // them, so their blocks have already resolved by the time this reply arrives. A
+        // stream that reset in between fails every pending tracked send, which lands here
+        // as a missing acknowledgement.
+        guard bootstrapWritesAcknowledged == writes.count else { return false }
+        let read = Self.readBringupRows(lines)
+        placeholderWindowId = read.placeholder
+        ownedWindowIds = read.adopted
+        return true
     }
 
-    /// A pre-attach `tmux` one-shot over the shared master, returning stdout (or ""
-    /// on failure). Only safe before the `-CC` client attaches (MaxSessions=1).
-    private func runOneShot(_ argv: [String]) async -> String {
-        (try? await transport.runTmux(argv))?.stdout ?? ""
+    /// Reads the bringup's `list-windows -F '#{window_id} #{window_linked}'` reply into the
+    /// placeholder and the windows to treat as ours. Pure, so the row rules can be checked
+    /// without a server.
+    ///
+    /// The placeholder is the window reconcile must never unlink: it is the only window the
+    /// view is guaranteed to keep, and unlinking it would destroy the view. It is the
+    /// lowest-index window that is NOT linked into another session — `list-windows` is
+    /// ordered by index, and every window cmux links in is by definition linked. Index alone
+    /// is not enough: `link-window -b` inserts before the target and `base-index` differs
+    /// between hosts, so on tmux 3.7 the first row can be a linked copy, which would then be
+    /// protected from unlinking while the real placeholder was not. A window whose home
+    /// session has died is also unlinked, so this picks it instead when it sits at a lower
+    /// index than the placeholder; it would then be left in the view rather than unlinked,
+    /// which is the same outcome the previous rule had for the placeholder itself.
+    ///
+    /// Everything else is adopted as owned, so a view reused from a prior cmux run can have
+    /// its dead linked copies unlinked — otherwise they accumulate in the persistent view.
+    nonisolated static func readBringupRows(
+        _ lines: [String]
+    ) -> (placeholder: String?, adopted: Set<String>) {
+        let rows = lines.compactMap { line -> (id: String, isLinked: Bool)? in
+            let fields = line.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            guard let id = fields.first, !id.isEmpty else { return nil }
+            return (id, fields.count > 1 && fields[1] == "1")
+        }
+        let placeholder = (rows.first { !$0.isLinked } ?? rows.first)?.id
+        var adopted = Set(rows.map(\.id))
+        if let placeholder { adopted.remove(placeholder) }
+        return (placeholder, adopted)
+    }
+
+    /// Kills our own stale views (an older name or format version) over the stream.
+    ///
+    /// The plan already filters the current view's name out of `staleViewsToKill`, so this
+    /// skip is a second line of the same defense rather than the one that holds. It stays
+    /// because the cost of being wrong is the whole host — a kill here would take down the
+    /// session this client is attached to — and this call site is the one that can name the
+    /// live view without any planning at all.
+    ///
+    /// `=` pins an exact match; a bare name is a prefix match, so reaping `cmux-view-a`
+    /// could otherwise take `cmux-view-ab` — a name a second cmux install can hold.
+    private func reapStaleViews(_ conn: RemoteTmuxControlConnection, names: [String]) {
+        for name in names where name != view.sessionName {
+            _ = conn.send("kill-session -t \(quoted("=" + name))")
+        }
     }
 
     // MARK: - Reconcile (over the live stream)
 
     private func scheduleReconcile() {
         Task { @MainActor in await self.reconcile() }
+    }
+
+    /// Re-runs the view bringup after a failure that produced no event to wait on.
+    ///
+    /// A delay, not a poll: the thing being waited for is a write the stream would not take, and
+    /// there is no edge that says it would take one now. Bounded, so a stream that never accepts the
+    /// ownership writes stops rather than reconciling in a loop — and `onEnded` still fires if the
+    /// stream dies, so giving up here does not strand the host silently.
+    private func scheduleBringupRetry() {
+        guard !isStopped, bringupRetries < Self.maxBringupRetries else { return }
+        bringupRetries += 1
+        let attempt = bringupRetries
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(250 * attempt))
+            guard let self, !self.isStopped, !self.didBootstrapView else { return }
+            await self.reconcile()
+        }
     }
 
 
@@ -362,6 +508,26 @@ final class RemoteTmuxViewConnection {
         defer {
             reconcileInFlight = false
             if reconcileQueued { reconcileQueued = false; scheduleReconcile() }
+        }
+
+        // First reconcile after a connect: finish the view bringup before reading the
+        // server, so the queries below see a view tagged as ours and the plan's
+        // placeholder/ownership inputs are populated. A bringup that did not fully land
+        // returns without applying anything, and the next reconcile retries it.
+        if !didBootstrapView {
+            guard await bootstrapViewOverStream(conn) else {
+                // "The next reconcile retries it" was only true when something else happened to
+                // trigger one. A bringup that fails on the SEND — a write the bounded writer
+                // refused, a stream that reset mid-batch — produces no topology event and no query
+                // timeout, so nothing was scheduled and the view stayed half-initialised with its
+                // options unwritten. Ask for one, bounded, because a view that cannot be stamped
+                // will not become stampable by asking faster.
+                scheduleBringupRetry()
+                return
+            }
+            guard !isStopped else { return }
+            didBootstrapView = true
+            bringupRetries = 0
         }
 
         // Bounded: an alive-but-slow server gets one longer retry before we decide
@@ -385,6 +551,11 @@ final class RemoteTmuxViewConnection {
             cmuxOwnedWindowIds: ownedWindowIds,
             placeholderWindowId: placeholderWindowId)
         let plan = RemoteTmuxLinkedViewPlan.plan(view: view, snapshot: snapshot)
+
+        // Garbage-collect the views this owner left behind under a different name or format
+        // version. They are ordinary sessions to tmux, so the kill rides the same stream as
+        // everything else; the plan already refuses to list a foreign owner's view.
+        reapStaleViews(conn, names: plan.staleViewsToKill)
 
         // Sticky: remember once a real workspace has been surfaced, so the bootstrap
         // below can never recreate a session the user just closed.
@@ -465,9 +636,30 @@ final class RemoteTmuxViewConnection {
         // once (it discards the window).
         guard !isStopped else { return }
         isStopped = true
+        latchCredentialVerdict()
         workspaces = []
         resolveFirstWorkspacesWaiters(false)
         onEnded?()
+    }
+
+    /// Installs a connection without starting a stream, so the teardown path is drivable in a test.
+    func adoptConnectionForTesting(_ connection: RemoteTmuxControlConnection) {
+        self.connection = connection
+    }
+
+    /// Records whether the stream was waiting for credentials, while the connection still exists to
+    /// be asked. Only ever latches true: a later teardown must not erase the reason for the first one.
+    private func latchCredentialVerdict() {
+        guard let connection else { return }
+        #if DEBUG
+        cmuxDebugLog(
+            "remote-tmux: latch-check host=\(host.destination) "
+                + "awaiting=\(connection.isAwaitingCredentials) "
+                + "preControl=\(connection.preControlObservationForDebug)")
+        #endif
+        guard connection.isAwaitingCredentials else { return }
+        lastStreamAwaitedCredentials = true
+        onAwaitingCredentials?()
     }
 
     private func quoted(_ v: String) -> String { RemoteTmuxHost.shellSingleQuoted(v) }

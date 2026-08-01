@@ -111,10 +111,10 @@ extension RemoteTmuxController {
         return mirror
     }
 
-    /// The multiplexed analogue of ``attachHost(host:windowTarget:activate:)``:
-    /// discovery + auth classification stay identical (sequential one-shots are safe
-    /// before any `-CC` client holds the host's single session), then ONE shared view
-    /// connection comes up and its reconcile builds the per-session workspaces.
+    /// The multiplexed analogue of ``attachHost(host:windowTarget:activate:)``: ONE shared view
+    /// connection comes up and its reconcile builds the per-session workspaces. Nothing else
+    /// touches the host — no discovery one-shot, no ControlMaster warmup, and no pre-attach
+    /// view creation — so a host that authenticates per connection is authenticated once.
     func attachHostMultiplexed(
         host: RemoteTmuxHost,
         windowTarget: RemoteTmuxAttachWindowTarget,
@@ -154,8 +154,14 @@ extension RemoteTmuxController {
                 return mirror.mirroredWorkspaceId
             }
             guard !workspaceIds.isEmpty else {
-                throw RemoteTmuxError.unreachable("could not mirror any tmux session on \(host.destination)")
+                throw multiplexedMirrorFailure(
+                    host: host, view: multiplexedViewsByHost[host.connectionHash])
             }
+            // Mirroring something is proof the credentials were accepted. Retiring the note here rather
+            // than only on a mirror's `.connected` edge matters because a mirror created after the
+            // shared stream is already connected never observes that transition, so a fresh attach
+            // would leave the note set and misreport the next unrelated failure as a login.
+            Self.hostAuth.retire(host)
             if activate {
                 selectFirstMirrorWorkspace(for: host, in: targetManager)
                 _ = appDelegate.focusMainWindow(windowId: resolvedWindowId)
@@ -164,21 +170,28 @@ extension RemoteTmuxController {
         }
         defer { windowRegistry.endAttach(hostHash: host.connectionHash) }
 
-        // Auth classification via the same one-shot the GA path uses (BatchMode over
-        // the shared master): an interactive-auth failure routes the CLI to its
-        // foreground handoff. `createIfEmpty: false` — the view coordinator has its
-        // own session-less-host bootstrap.
-        do {
-            _ = try await transport(for: host).discoverMirrorSessions(createIfEmpty: false)
-        } catch let error as RemoteTmuxError {
-            if case .commandFailed(_, let stderr) = error,
-               RemoteTmuxSSHTransport.indicatesInteractiveRetryWillHelp(stderr) {
-                return .authRequired(sshArgv: host.interactiveAuthInvocation())
-            }
-            throw error
-        }
+        // No preflight here, deliberately, and this is the point of multiplexing: the view stream is
+        // the ONLY connection this path opens.
+        //
+        // Two preflights used to run first, inherited from the per-session path. A one-shot
+        // `discoverMirrorSessions` whose result was DISCARDED (`_ =`) — it existed only to classify
+        // interactive auth, since the view coordinator does its own session-less bootstrap — and a
+        // ControlMaster warmup for a burst that multiplexed mode does not have.
+        //
+        // Over ssh both are nearly free and merely pointless. Over a transport that authenticates per
+        // connection they are fatal: measured against a corporate ssh broker, each invocation of the
+        // broker performs its own MFA and none of it persists — no shared ssh master ever appears — so
+        // the probe consumed the user's one prompt and the view stream then died silently against pipes
+        // with a passcode prompt it could not show. Four separate prompts in one session, minutes
+        // apart, each authenticating exactly one connection.
+        //
+        // Auth classification therefore comes from the view stream itself, which is the connection
+        // that actually needs credentials: the connection classifies `.authRequired` and calls
+        // `onAuthRequired`, which `RemoteTmuxViewConnection` already forwards. That is strictly better
+        // information than a probe on a different channel, and it needs no per-transport branching —
+        // a transport check would have to be revisited for every new client type, while "one
+        // connection" holds for all of them.
         try Task.checkCancellation()
-        try await ensureControlMasterReadyForBurst(host: host)
 
         let existingMirrorWindowID = existingMirrorManager(for: host)
             .flatMap { appDelegate.windowId(for: $0) }
@@ -191,7 +204,7 @@ extension RemoteTmuxController {
         ), let targetManager = appDelegate.tabManagerFor(windowId: resolvedWindowId) else {
             if existingMirrorWindowID == nil, multiplexedViewsByHost[host.connectionHash] == nil {
                 transportRegistry.remove(connectionHash: host.connectionHash)
-                RemoteTmuxSSHTransport.spawnControlMasterExit(host: host)
+                closeSharedSSHMasterIfAny(host: host)
             }
             throw RemoteTmuxError.unreachable("app not ready")
         }
@@ -207,7 +220,10 @@ extension RemoteTmuxController {
         // generous deadline as a last resort only — a session-less host's
         // bootstrap legitimately needs several round trips, and a premature
         // timeout here would tear down a connection that was about to succeed.
-        if !hostHasLiveMirror(host), let view = multiplexedViewsByHost[host.connectionHash] {
+        // Held across the wait: the teardown can clear the dictionary entry while we are suspended,
+        // and the failure path still needs something to ask.
+        let heldView = multiplexedViewsByHost[host.connectionHash]
+        if !hostHasLiveMirror(host), let view = heldView {
             _ = await view.awaitFirstWorkspaces(timeout: 30)
             if !hostHasLiveMirror(host), let shared = view.connection {
                 applyMultiplexedWorkspaces(
@@ -219,9 +235,12 @@ extension RemoteTmuxController {
             return mirror.mirroredWorkspaceId
         }
         guard !workspaceIds.isEmpty else {
+            // Ask before stopping: `stopMultiplexedHost` discards the view that holds the verdict.
+            let failure = multiplexedMirrorFailure(host: host, view: heldView)
             stopMultiplexedHost(host: host)
-            throw RemoteTmuxError.unreachable("could not mirror any tmux session on \(host.destination)")
+            throw failure
         }
+        Self.hostAuth.retire(host)
         if activate {
             selectFirstMirrorWorkspace(for: host, in: targetManager)
             _ = appDelegate.focusMainWindow(windowId: resolvedWindowId)
@@ -229,12 +248,72 @@ extension RemoteTmuxController {
         return .mirrored(windowId: resolvedWindowId, workspaceIds: workspaceIds)
     }
 
+    /// Hosts whose stream was last seen waiting for credentials, keyed by connection hash.
+    ///
+    /// Outlives the view on purpose. A stream that parks on a passcode is torn down by `onEnded` ->
+    /// `teardownMultiplexedHost`, which removes the view from `multiplexedViewsByHost`, so a reader at
+    /// give-up time can find neither the connection nor the view. Latching on either of those was the
+    /// original bug relocated, not fixed.
+    static var hostAuth = HostAuthLedger()
+
+    /// Which hosts are waiting for a login, with the retirement in the same type as the note.
+    ///
+    /// This began as a bare `Set<String>` and shipped with no retirement at all, so one passcode
+    /// prompt made every later failure on that host report a login — for the rest of the process, a
+    /// network outage included. The asymmetry was invisible at a `Set`; here `note` and `retire` sit
+    /// next to each other and a missing one is a hole you can see.
+    struct HostAuthLedger {
+        private var awaiting: Set<String> = []
+
+        /// The stream showed an unanswered prompt.
+        mutating func note(_ host: RemoteTmuxHost) { awaiting.insert(host.connectionHash) }
+
+        /// Something authenticated: a mirror published, or the stream reached `.connected`.
+        mutating func retire(_ host: RemoteTmuxHost) { awaiting.remove(host.connectionHash) }
+
+        func isAwaiting(_ host: RemoteTmuxHost) -> Bool { awaiting.contains(host.connectionHash) }
+    }
+
+    /// Records that this host's stream is waiting for credentials, while something still knows.
+    func noteAwaitingCredentials(host: RemoteTmuxHost) {
+        Self.hostAuth.note(host)
+    }
+
+    /// Why a host ended up with nothing mirrored.
+    ///
+    /// A stream that is waiting for a passcode produces no error of its own — it prints a prompt and
+    /// sits there — so the deadline expires first and the generic message sends the user to check the
+    /// network instead of their second factor. The view latches that observation while its connection
+    /// still exists; the live connection is consulted too, for the case where nothing has torn down yet.
+    func multiplexedMirrorFailure(host: RemoteTmuxHost, view: RemoteTmuxViewConnection?) -> RemoteTmuxError {
+        // The caller passes the view it already holds; re-reading the dictionary here found nil once the
+        // teardown had run. The host-level note is the fallback for when even that view is gone.
+        let live = view ?? multiplexedViewsByHost[host.connectionHash]
+        let fromNote = Self.hostAuth.isAwaiting(host)
+        let fromLatch = live?.lastStreamAwaitedCredentials == true
+        let fromConnection = live?.connection?.isAwaitingCredentials == true
+        let awaited = fromNote || fromLatch || fromConnection
+        live?.connection?.record(
+            "mirror-failure awaiting=\(awaited) note=\(fromNote) latch=\(fromLatch) "
+                + "conn=\(fromConnection) hasView=\(live != nil) hasConn=\(live?.connection != nil)")
+        #if DEBUG
+        cmuxDebugLog(
+            "remote-tmux: mirror-failure host=\(host.destination) awaiting=\(awaited) note=\(fromNote) "
+                + "latch=\(fromLatch) conn=\(fromConnection) hasView=\(live != nil) "
+                + "hasConn=\(live?.connection != nil)")
+        #endif
+        return RemoteTmuxController.mirrorFailure(
+            destination: host.destination, awaitingCredentials: awaited)
+    }
+
     /// Brings up the host's single shared view connection and wires its reconcile to
     /// build/rescope/tear down the per-session mirrors. Stores the view before the
     /// throwing `start()` so a failed launch is torn down via ``stopMultiplexedHost(host:)``.
+    ///
+    /// The view takes no ssh transport: everything it needs from the host, including creating
+    /// the hidden view session, now rides its own control stream.
     func startMultiplexedHost(host: RemoteTmuxHost, manager: TabManager) async throws {
-        let view = RemoteTmuxViewConnection(
-            host: host, ownerId: Self.multiplexerOwnerId, transport: transport(for: host))
+        let view = RemoteTmuxViewConnection(host: host, ownerId: Self.multiplexerOwnerId)
         view.onWorkspacesChanged = { [weak self, weak manager, weak view] in
             guard let self, let view, let shared = view.connection else { return }
             // Prefer the manager the host's mirrors CURRENTLY live in: the
@@ -247,9 +326,20 @@ extension RemoteTmuxController {
         view.onEnded = { [weak self] in
             self?.teardownMultiplexedHost(host: host)
         }
+        // Store the verdict host-wide before the teardown above can discard the view holding it.
+        view.onAwaitingCredentials = { [weak self] in
+            self?.noteAwaitingCredentials(host: host)
+        }
+        // Same login path the GA (one-connection-per-session) mirrors use. Without this a
+        // multiplexed host that parks on authentication offers no login at all and every session
+        // on it stays frozen, because the parked stream is the shared view connection rather than
+        // any one session's own.
+        view.onAuthRequired = { [weak self] sshArgv in
+            self?.presentReconnectAuthentication(host: host, sshArgv: sshArgv) ?? false
+        }
         multiplexedViewsByHost[host.connectionHash] = view
         do {
-            try await view.start()
+            try view.start()
         } catch {
             stopMultiplexedHost(host: host)
             throw error
@@ -432,9 +522,20 @@ extension RemoteTmuxController {
         }
         if !multiplexerHostStillInUse(host) {
             transportRegistry.remove(connectionHash: host.connectionHash)
-            RemoteTmuxSSHTransport.spawnControlMasterExit(host: host)
+            closeSharedSSHMasterIfAny(host: host)
         }
         return true
+    }
+
+    /// Closes the host's shared ssh ControlMaster, for the hosts that have one.
+    ///
+    /// Only ssh carries this stream over the shared master. A multiplexed attach on another
+    /// transport opens its one connection and runs no ssh one-shot, so there is no master
+    /// here to close — and `ssh -O exit` would still spawn an ssh process, which is exactly
+    /// what the "one connection per attach" claim is measured by sampling.
+    private func closeSharedSSHMasterIfAny(host: RemoteTmuxHost) {
+        guard host.transport == .ssh else { return }
+        RemoteTmuxSSHTransport.spawnControlMasterExit(host: host)
     }
 
     /// Whether `host`'s shared transport/master is still needed by any live mirror in
