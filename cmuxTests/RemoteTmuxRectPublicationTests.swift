@@ -35,9 +35,20 @@ import Testing
         return (connection, writer, pipe)
     }
 
+    /// Feeds one scripted command result. The first time a window is staged,
+    /// `stagePendingLayout` issues its `pane-border-status` subscription ahead
+    /// of the rects fetch, and a real stream answers that `refresh-client -B`
+    /// with an empty result block of its own. Ack any such subscription slots
+    /// at the FIFO head first, so the scripted lines land on the
+    /// list-windows/list-panes slot they are written for.
     private func reply(
         _ connection: RemoteTmuxControlConnection, lines: [String], isError: Bool = false
     ) {
+        while case .other? = connection.pendingCommandKindsForTesting.first {
+            connection.handleMessageForTesting(
+                .commandResult(commandNumber: 0, lines: [], isError: false)
+            )
+        }
         connection.handleMessageForTesting(
             .commandResult(commandNumber: 0, lines: lines, isError: isError)
         )
@@ -67,6 +78,17 @@ import Testing
             if case .paneRects = $0 { return true }
             return false
         }.count
+    }
+
+    /// The window id of the first queued rects fetch. Each window's first
+    /// staging queues its border-status subscription ahead of its rects fetch,
+    /// so the next fetch to answer is the first `.paneRects` entry, not
+    /// necessarily the FIFO head.
+    private func firstPaneRectsWindow(in kinds: [RemoteTmuxControlCommandKind]) -> Int? {
+        for kind in kinds {
+            if case let .paneRects(windowId, _) = kind { return windowId }
+        }
+        return nil
     }
 
     @Test func layoutChangeNotifiesOnlyOnItsRectsReply() {
@@ -131,8 +153,8 @@ import Testing
             "@2 e5d1,90x30,0,0,5 e5d1,90x30,0,0,5 [] two",
         ])
         let kinds = connection.pendingCommandKindsForTesting
-        guard case let .paneRects(firstWindow, _) = kinds.first else {
-            Issue.record("expected a paneRects fetch at the FIFO head, got \(kinds)")
+        guard let firstWindow = firstPaneRectsWindow(in: kinds) else {
+            Issue.record("expected a queued paneRects fetch, got \(kinds)")
             return
         }
         let firstPane = firstWindow == 1 ? 0 : 5
@@ -160,8 +182,8 @@ import Testing
             "@2 e5d1,90x30,0,0,5 e5d1,90x30,0,0,5 [] two",
         ])
         let kinds = connection.pendingCommandKindsForTesting
-        guard case let .paneRects(firstWindow, _) = kinds.first else {
-            Issue.record("expected a paneRects fetch at the FIFO head, got \(kinds)")
+        guard let firstWindow = firstPaneRectsWindow(in: kinds) else {
+            Issue.record("expected a queued paneRects fetch, got \(kinds)")
             return
         }
         let firstPane = firstWindow == 1 ? 0 : 5
@@ -231,9 +253,9 @@ import Testing
         ])
         notifies = 0 // the list-windows order/name notify is not under test
         let kinds = connection.pendingCommandKindsForTesting
-        #expect(kinds.count == 2)
-        guard case let .paneRects(firstWindow, _) = kinds[0] else {
-            Issue.record("expected a paneRects fetch at the FIFO head, got \(kinds)")
+        #expect(paneRectsFIFOCount(connection) == 2)
+        guard let firstWindow = firstPaneRectsWindow(in: kinds) else {
+            Issue.record("expected a queued paneRects fetch, got \(kinds)")
             return
         }
         let firstPane = firstWindow == 1 ? 0 : 5
@@ -414,8 +436,8 @@ import Testing
         ])
         notifies = 0
         let kinds = connection.pendingCommandKindsForTesting
-        guard case let .paneRects(erroringWindow, _) = kinds.first else {
-            Issue.record("expected a paneRects fetch at the FIFO head, got \(kinds)")
+        guard let erroringWindow = firstPaneRectsWindow(in: kinds) else {
+            Issue.record("expected a queued paneRects fetch, got \(kinds)")
             return
         }
         let healthyWindow = erroringWindow == 1 ? 2 : 1
