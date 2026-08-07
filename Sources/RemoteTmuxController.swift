@@ -290,6 +290,24 @@ final class RemoteTmuxController {
     var newWorkspaceWaiters: [String: [NewWorkspaceWaiter]] = [:]
     /// Per-waiter deadline tasks, owned here so resolution cancels them exactly once.
     var newWorkspaceTimeoutTasks: [UUID: Task<Void, Never>] = [:]
+    /// Outstanding login offers, keyed by ``RemoteTmuxHost/connectionHash``.
+    ///
+    /// See ``RemoteTmuxLoginOffers`` for why the slot is reserved before the workspace is
+    /// created and released only on a successful connect.
+    var loginOffers = RemoteTmuxLoginOffers()
+
+    /// Hosts with a login waiter running, and the task doing the waiting. Folding a repeat
+    /// auth-required into an existing offer must not start a second waiter.
+    ///
+    /// The task is held rather than fire-and-forget so it can be cancelled: a waiter that
+    /// outlives the offer it was created for keeps probing a master nobody is waiting on, and
+    /// nothing else could stop it.
+    var hostsWaitingForAuth: Set<String> = []
+    var authWaitTasks: [String: Task<Void, Never>] = [:]
+    /// Identifies which waiter owns a host's registration, so a cancelled one cannot retract the
+    /// registration of the waiter that replaced it.
+    var authWaitIds: [String: UInt64] = [:]
+    var authWaitGeneration: UInt64 = 0
 
     /// In-flight attach guards and kill-on-close markers for remote tmux mirrors.
     let windowRegistry = RemoteTmuxWindowRegistry()
@@ -882,6 +900,14 @@ final class RemoteTmuxController {
     /// down via `detachObserver`.
     func handleWindowWorkspacesClosed(workspaceIds: [UUID]) {
         let ids = Set(workspaceIds)
+        // A login cmux opened can be in a different window from the mirror it exists for, so a
+        // window close is a decline for every login it takes with it. Without this, closing the
+        // login's window leaves that host parked with retrying stopped and no waiter, and the
+        // mirror in the other window stays frozen until cmux restarts — the per-workspace close
+        // path handles only its own window's tabs.
+        for workspaceId in ids {
+            noteLoginWorkspaceClosed(workspaceId: workspaceId)
+        }
         var affectedHosts: [String: RemoteTmuxHost] = [:]
         for (key, mirror) in sessionMirrors {
             guard let workspaceId = mirror.mirroredWorkspaceId, ids.contains(workspaceId) else { continue }
@@ -908,6 +934,9 @@ final class RemoteTmuxController {
         // ControlMaster now — the last-session teardown paths already do this, and
         // a window close must too or the master lingers for the full
         // ControlPersist window.
+        for (_, host) in affectedHosts {
+            releaseLoginOfferIfHostHasNoMirrors(host: host)
+        }
         for (hash, host) in affectedHosts {
             let stillUsed = sessionMirrors.values.contains { $0.host.connectionHash == hash }
                 || connectionsByHostSession.values.contains { $0.host.connectionHash == hash }
@@ -994,6 +1023,7 @@ final class RemoteTmuxController {
         removeCachedConnection(forKey: entry.key)?.stop()
         let hostHasOtherMirrors = sessionMirrors.values.contains { $0.host.connectionHash == host.connectionHash }
         if !hostHasOtherMirrors, !connectionsByHostSession.values.contains(where: { $0.host.connectionHash == host.connectionHash }) { transportRegistry.remove(connectionHash: host.connectionHash); RemoteTmuxSSHTransport.spawnControlMasterExit(host: host) }
+        releaseLoginOfferIfHostHasNoMirrors(host: host)
     }
 
     /// User-initiated mirrored workspace close detaches locally and kills the remote session.
@@ -1093,6 +1123,8 @@ final class RemoteTmuxController {
         // Stop every shared view stream first — their channels aren't cached
         // connections, so the loop below can't see them.
         for host in multiplexedViewsByHost.values.map(\.host) { stopMultiplexedHost(host: host) }
+        // No waiter may outlive the mirrors it was waiting for.
+        for key in Array(authWaitTasks.keys) { cancelAuthWait(host: key) }
         let connections = Array(connectionsByHostSession.keys).compactMap { removeCachedConnection(forKey: $0) }
         for connection in connections { connection.stop() }
         // Fire-and-forget `ssh -O exit` per endpoint: it hits the local control
