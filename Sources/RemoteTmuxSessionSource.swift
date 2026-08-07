@@ -25,6 +25,9 @@ struct RemoteTmuxSessionObservers {
     var onReconnectReady: (() -> Void)?
     var onExit: (() -> Void)?
     var onConnectionStateChanged: ((RemoteTmuxConnectionState) -> Void)?
+    /// Fires when a reconnect failed because the host wants interactive
+    /// authentication; returns whether a consumer took ownership of the login.
+    var onAuthRequired: ((_ sshArgv: [String]) -> Bool)?
 
     init(
         onPaneOutput: ((_ paneId: Int, _ data: Data) -> Void)? = nil,
@@ -36,7 +39,8 @@ struct RemoteTmuxSessionObservers {
         onTopologyChanged: (() -> Void)? = nil,
         onReconnectReady: (() -> Void)? = nil,
         onExit: (() -> Void)? = nil,
-        onConnectionStateChanged: ((RemoteTmuxConnectionState) -> Void)? = nil
+        onConnectionStateChanged: ((RemoteTmuxConnectionState) -> Void)? = nil,
+        onAuthRequired: ((_ sshArgv: [String]) -> Bool)? = nil
     ) {
         self.onPaneOutput = onPaneOutput
         self.onPaneSeed = onPaneSeed
@@ -48,6 +52,7 @@ struct RemoteTmuxSessionObservers {
         self.onReconnectReady = onReconnectReady
         self.onExit = onExit
         self.onConnectionStateChanged = onConnectionStateChanged
+        self.onAuthRequired = onAuthRequired
     }
 }
 
@@ -97,6 +102,14 @@ protocol RemoteTmuxSessionSource: AnyObject {
     func addObserver(_ observers: RemoteTmuxSessionObservers) -> UUID
     func removeObserver(_ token: UUID)
 
+    /// Asks the transport to drop into its reconnect loop (backpressure,
+    /// stream damage). A source whose transport reconnects on its own may
+    /// treat this as a hint and do nothing.
+    func beginReconnecting()
+    /// Resumes a reconnect that paused for interactive authentication, after a
+    /// consumer ran the login. A source that never pauses for auth may no-op.
+    func resumeAfterInteractiveAuth()
+
     /// Releases this mirror's hold on its transport (observer slots, cached process
     /// ownership). This never touches sibling sessions that share the same transport.
     func releaseMirror()
@@ -128,6 +141,8 @@ protocol RemoteTmuxSessionSource: AnyObject {
     @discardableResult func sendWindowReorder(_ commands: [String], verification: ((Bool) -> Void)?) -> Bool
     /// Forwards typed input to a pane.
     @discardableResult func sendKeys(paneId: Int, data: Data) -> Bool
+    /// Sends one validated named key (tmux `send-keys` name form) to a pane.
+    @discardableResult func sendKey(paneId: Int, key: RemoteTmuxKeyName) -> Bool
     /// Replays a pane's captured contents into a freshly-mounted surface, clearing
     /// that surface's scrollback first when the capture carries the pane's own
     /// history. Returns the id of the pane-seed transaction, or nil when no seed
@@ -186,7 +201,8 @@ extension RemoteTmuxControlConnection: RemoteTmuxSessionSource {
             onTopologyChanged: observers.onTopologyChanged,
             onReconnectReady: observers.onReconnectReady,
             onExit: observers.onExit,
-            onConnectionStateChanged: observers.onConnectionStateChanged
+            onConnectionStateChanged: observers.onConnectionStateChanged,
+            onAuthRequired: observers.onAuthRequired
         )
     }
 }

@@ -211,6 +211,13 @@ final class RemoteTmuxSessionChannel: RemoteTmuxSessionSource {
 
     func removeObserver(_ token: UUID) { observers[token] = nil }
 
+    /// The shared transport owns the reconnect loop; forwarding the hint means
+    /// backpressure on any one session recycles the stream they all ride.
+    func beginReconnecting() { underlying.beginReconnecting() }
+
+    /// Auth pauses belong to the shared transport, so the resume does too.
+    func resumeAfterInteractiveAuth() { underlying.resumeAfterInteractiveAuth() }
+
     // MARK: - RemoteTmuxSessionSource: commands (server-global @window/%pane ids pass through)
 
     @discardableResult func send(_ command: String) -> Bool { underlying.send(command) }
@@ -262,6 +269,10 @@ final class RemoteTmuxSessionChannel: RemoteTmuxSessionSource {
         }
         return true
     }
+    @discardableResult func sendKey(paneId: Int, key: RemoteTmuxKeyName) -> Bool {
+        underlying.sendKey(paneId: paneId, key: key)
+    }
+
     @discardableResult func sendKeys(paneId: Int, data: Data) -> Bool { underlying.sendKeys(paneId: paneId, data: data) }
     @discardableResult func sendTracked(_ command: String, completion: @escaping (Bool) -> Void) -> Bool {
         underlying.sendTracked(command, completion: completion)
