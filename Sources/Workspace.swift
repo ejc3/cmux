@@ -484,6 +484,11 @@ extension Workspace {
                           let bindingSessionId = Self.normalizedResumeBindingValue(resumeBinding.checkpointId) else {
                         return false
                     }
+                    if resumeBinding.recordsRunningPersistentSSHAgent(
+                        in: persistentSSHResumeContext(panelID: panelId)
+                    ) {
+                        return true
+                    }
                     if restoredAgentLifecycleConfirmsRunning(resumeBinding, panelId: panelId) {
                         return true
                     }
@@ -1586,7 +1591,7 @@ extension Workspace {
             }()
             let requestedWorkingDirectory =
                 localWorkingDirectory ?? hostShellWorkingDirectory
-            let restoredAgentWillRunStartupCommand = restorableAgent != nil &&
+            let restoredAgentWillRunStartupCommand =
                 restoredPersistentSSHResumeCommand != nil &&
                 resumeBinding?.isAgentHookBinding == true
             let restoredAgentWillRunStartupInput =
