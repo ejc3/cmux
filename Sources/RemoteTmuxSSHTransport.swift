@@ -270,8 +270,23 @@ actor RemoteTmuxSSHTransport {
         (try? await masterIsRunning()) ?? false
     }
 
+    /// Whether cmux is allowed to end the master behind `controlPath`.
+    ///
+    /// cmux always creates its own socket as a real socket under `~/.cmux/ssh`. A
+    /// symlink there was put in place by the user to share a master they opened
+    /// themselves — often the only authenticated connection to that host, holding
+    /// live sessions. `ssh -O exit` follows the link and ends that master, so
+    /// closing a mirror window or quitting the app would drop the user's own
+    /// connection and force them to authenticate again. Leave those alone; a
+    /// master cmux did not open is not cmux's to close.
+    nonisolated static func ownsControlMaster(at controlPath: String) -> Bool {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: controlPath)
+        return (attrs?[.type] as? FileAttributeType) != .typeSymbolicLink
+    }
+
     /// Tears down the shared SSH master (e.g. when the user removes a host).
     func shutdownMaster() async {
+        guard Self.ownsControlMaster(at: host.controlSocketPath) else { return }
         _ = try? await Self.runProcess(
             executable: sshExecutablePath,
             arguments: ["-O", "exit", "-o", "ControlPath=\(host.controlSocketPath)", "--", host.destination]
@@ -285,11 +300,13 @@ actor RemoteTmuxSSHTransport {
     /// LOCAL control socket (fast, no network round-trip) and the spawned process
     /// runs independently of cmux, so the master is torn down even as the app exits
     /// — instead of lingering for `ControlPersist` after the user closes the app or
-    /// the mirror window. Best-effort: a missing/dead socket just fails fast.
+    /// the mirror window. Best-effort: a missing/dead socket just fails fast, and a
+    /// master cmux did not open is left running (see ``ownsControlMaster(at:)``).
     nonisolated static func spawnControlMasterExit(
         host: RemoteTmuxHost,
         sshExecutablePath: String = RemoteTmuxHost.defaultSSHExecutablePath()
     ) {
+        guard ownsControlMaster(at: host.controlSocketPath) else { return }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: sshExecutablePath)
         process.arguments = ["-O", "exit", "-o", "ControlPath=\(host.controlSocketPath)", "--", host.destination]
