@@ -454,13 +454,6 @@ final class RemoteTmuxController {
         waiter.resume(workspaceId)
     }
 
-    /// The destination (ssh alias / `user@host`) of the host whose mirror owns
-    /// `workspaceId`, or nil when no mirror maps to it. Mirror workspaces carry
-    /// their host only through the session mirror, so per-host UI (origin color)
-    /// reads it here.
-    func hostDestination(forWorkspaceId workspaceId: UUID) -> String? {
-        sessionMirrors.values.first(where: { $0.mirroredWorkspaceId == workspaceId })?.host.destination
-    }
 
     /// The in-flight routed New Workspace request, if any. Tests await it so the
     /// create round trip and mirror creation finish inside the test body.
