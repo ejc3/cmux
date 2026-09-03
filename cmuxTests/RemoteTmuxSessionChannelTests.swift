@@ -24,7 +24,14 @@ import Testing
         )
 
         var readyCount = 0
-        _ = channel.addObserver(RemoteTmuxSessionObservers(onReconnectReady: { readyCount += 1 }))
+        // Every observer is named: the merged observers type has no defaults, so a
+        // dropped callback is a build failure rather than a silently ignored event.
+        _ = channel.addObserver(RemoteTmuxSessionObservers(
+            onPaneOutput: nil, onPaneSeed: nil, onPaneCwd: nil, onPaneReflow: nil,
+            onActivePaneChanged: nil, onSessionChanged: nil, onTopologyChanged: nil,
+            onReconnectReady: { readyCount += 1 },
+            onExit: nil, onConnectionStateChanged: nil, onAuthRequired: nil
+        ))
 
         source.fireReconnectReady()
         #expect(
