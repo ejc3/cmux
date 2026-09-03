@@ -66,6 +66,8 @@ import Testing
     @Test func onlyTheSSHTransportDeclaresAnSSHShapedLogin() {
         #expect(RemoteTmuxSSHTransportProfile().authenticationIsSSHShaped)
         #expect(!RemoteTmuxETTransportProfile(port: 2022).authenticationIsSSHShaped)
+    }
+
     @Test func tmuxSocketPermissionErrorIsNotAnAuthPrompt() {
         // ssh authenticated fine here; tmux could not open its socket. listSessions
         // asks about auth before it asks about the server, so classifying this as
