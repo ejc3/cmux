@@ -1,6 +1,11 @@
-Sources/RemoteTmuxControlConnection+Sizing.swift:sendPerWindowRedrawKick
-Sources/RemoteTmuxControlConnection+Sizing.swift:sendSessionRedrawKick
-Sources/RemoteTmuxControlConnection+Sizing.swift:setClientSize
-Sources/RemoteTmuxControlConnection+Sizing.swift:setWindowSize
-Sources/RemoteTmuxSSHTransport.swift:killSessions
-Sources/RemoteTmuxWindowMirror.swift:establishPaneKeyFocusWhenMounted
+Sources/RemoteTmuxControlConnection.swift:detachAwaitingExit:DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: deadline)
+Sources/RemoteTmuxControlConnection.swift:detachThenStop:DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: backstop)
+Sources/RemoteTmuxControlConnection.swift:terminateProcessTree:try? await Task.sleep(nanoseconds: 2_000_000_000)
+Sources/RemoteTmuxControlConnection+PaneSubscriptions.swift:queryOutcomeWithTimeout:try? await Task.sleep(nanoseconds: UInt64(max(0, timeout) * 1_000_000_000))
+Sources/RemoteTmuxControlConnection+Sizing.swift:sendPerWindowRedrawKick:try await ContinuousClock().sleep(for: .milliseconds(Self.attachRedrawKickGapMs))
+Sources/RemoteTmuxControlConnection+Sizing.swift:sendSessionRedrawKick:try await ContinuousClock().sleep(for: .milliseconds(Self.attachRedrawKickGapMs))
+Sources/RemoteTmuxControlConnection+Sizing.swift:setClientSize:try await ContinuousClock().sleep(for: .milliseconds(Self.clientSizeDebounceMs))
+Sources/RemoteTmuxControlConnection+Sizing.swift:setWindowSize:try await ContinuousClock().sleep(for: .milliseconds(Self.clientSizeDebounceMs))
+Sources/RemoteTmuxController.swift:awaitNewWorkspace:try? await Task.sleep(for: deadline)
+Sources/RemoteTmuxSSHTransport.swift:killSessions:group.addTask { try? await ContinuousClock().sleep(for: timeout) }
+Sources/RemoteTmuxViewConnection.swift:wait:private var timer: DispatchSourceTimer?
