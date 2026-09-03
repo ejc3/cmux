@@ -8197,6 +8197,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         )
     }
 
+    /// Creates a new LOCAL terminal workspace even in a remote-tmux mirror window.
+    /// Plain New Workspace (⌘N) in a mirror window spawns a remote tmux session on
+    /// the active tab's host; this is the explicit escape hatch to open local work
+    /// alongside mirrors — it skips the remote-routing branch and otherwise shares
+    /// the same window routing, placement, and naming.
+    @discardableResult
+    func performNewLocalWorkspaceAction(
+        tabManager preferredTabManager: TabManager? = nil,
+        event: NSEvent? = nil,
+        debugSource: String = "newLocalWorkspace"
+    ) -> Bool {
+        performNewWorkspaceCreationAction(
+            initialSurface: .terminal,
+            preferredTabManager: preferredTabManager,
+            event: event,
+            debugSource: debugSource,
+            forceLocal: true
+        )
+    }
+
     /// Creates a new workspace whose initial surface is a browser pane in its
     /// default new-tab state with the address bar focused. Shares the window
     /// routing, placement, and naming semantics of `performNewWorkspaceAction`.
@@ -8374,7 +8394,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         initialBrowserTransparentBackground: Bool = false,
         applyCreationTitleAsCustomTitle: Bool = true,
         focusInitialBrowserAddressBarOnCreate: Bool = true,
-        createdWorkspaceHandler: ((Workspace) -> Void)? = nil
+        createdWorkspaceHandler: ((Workspace) -> Void)? = nil,
+        forceLocal: Bool = false
     ) -> Bool {
         let preferredContext = preferredTabManager.flatMap { mainWindowContext(for: $0) }
         let livePreferredContext: MainWindowContext? = {
@@ -8401,11 +8422,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 let initialWorkspace = context.tabManager.selectedWorkspace
                 switch initialSurface {
                 case .terminal:
-                    _ = executeConfiguredNewWorkspaceActionIfAvailable(
-                        in: context,
-                        debugSource: debugSource,
-                        replacingInitialWorkspace: initialWorkspace
-                    )
+                    // "New Local Workspace" means a PLAIN local terminal
+                    // workspace; the configured override must not substitute
+                    // another action for it.
+                    if !forceLocal {
+                        _ = executeConfiguredNewWorkspaceActionIfAvailable(
+                            in: context,
+                            debugSource: debugSource,
+                            replacingInitialWorkspace: initialWorkspace
+                        )
+                    }
                 case .browser:
                     // The fresh window boots with a terminal workspace; add the
                     // browser workspace and close that initial one so the
@@ -8443,12 +8469,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let context = livePreferredContext
             ?? preferredMainWindowContextForWorkspaceCreation(event: event, debugSource: debugSource)
 
-        // On a remote-tmux mirror workspace, a new terminal workspace means "create
-        // a new tmux session on that workspace's host" — route it to the remote and
-        // mirror it back instead of creating a local workspace. Inert off a mirror
-        // (handleNewWorkspaceRequested returns false), so local/browser flows below
-        // are unaffected.
+        // On a remote-tmux mirror workspace, a new terminal workspace means
+        // "create a new tmux session on that workspace's host" — route it to the
+        // remote and mirror it back instead of creating a local workspace. The
+        // browser variant always stays local, and `forceLocal` (the "New Local
+        // Workspace" command) is the explicit escape hatch for opening local
+        // work alongside mirrors.
         if initialSurface == .terminal,
+           !forceLocal,
            let context,
            remoteTmuxController.handleNewWorkspaceRequested(in: context.tabManager) {
             return true
@@ -8459,6 +8487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // plain New Workspace behavior; the browser variant keeps its own
         // fixed semantics and skips it.
         if initialSurface == .terminal,
+           !forceLocal,
            let context,
            executeConfiguredNewWorkspaceActionIfAvailable(
                in: context,
@@ -14869,6 +14898,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return true
         }
 
+        if matchConfiguredShortcut(event: event, action: .newLocalWorkspace) {
+#if DEBUG
+            cmuxDebugLog("shortcut.action name=newLocalWorkspace \(debugShortcutRouteSnapshot(event: event))")
+#endif
+            performNewLocalWorkspaceAction(event: event, debugSource: "shortcut.ctrlCmdN")
+            return true
+        }
+
         // New Window: Cmd+Shift+N
         // Handled here instead of relying on SwiftUI's CommandGroup menu item because
         // after a browser panel has been shown, SwiftUI's menu dispatch can silently
@@ -17312,7 +17349,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .builtIn(let builtIn):
             switch builtIn {
             case .newWorkspace:
-                guard context.tabManager.addWorkspaceIfActive() != nil else { return false }
+                // Same routing as Cmd+N: on an active mirror workspace the
+                // built-in action creates a session on that mirror's host.
+                if !remoteTmuxController.handleNewWorkspaceRequested(in: context.tabManager) {
+                    guard context.tabManager.addWorkspaceIfActive() != nil else { return false }
+                }
                 onExecuted?()
                 return true
             case .newAgentChat: return performConfiguredNewAgentChatAction(context: context, preferredWindow: preferredWindow, onExecuted: onExecuted)
