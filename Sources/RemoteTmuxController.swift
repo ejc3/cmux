@@ -281,7 +281,8 @@ final class RemoteTmuxController {
     /// created and released only on a successful connect.
     var loginOffers = RemoteTmuxLoginOffers()
 
-    /// Hosts with a login waiter running, and the task doing the waiting.
+    /// Hosts with a login waiter running, and the task doing the waiting. Folding a repeat
+    /// auth-required into an existing offer must not start a second waiter.
     ///
     /// The task is held rather than fire-and-forget so it can be cancelled: a waiter that
     /// outlives the offer it was created for keeps probing a master nobody is waiting on, and
@@ -881,6 +882,7 @@ final class RemoteTmuxController {
         removeCachedConnection(forKey: key)?.detachThenStop()
         let hostHasOtherMirrors = sessionMirrors.values.contains(where: { $0.host.connectionHash == host.connectionHash })
         if !hostHasOtherMirrors {
+            releaseLoginOfferIfHostHasNoMirrors(host: host)
             let hostHasOtherConnections = connectionsByHostSession.values
                 .contains { $0.host.connectionHash == host.connectionHash }
             if !hostHasOtherConnections {
@@ -1083,6 +1085,9 @@ final class RemoteTmuxController {
         mirror.detachObserver()
         detach(host: host, sessionName: sessionName)
         let isLastSession = !sessionMirrors.values.contains(where: { $0.host.connectionHash == host.connectionHash })
+        if isLastSession {
+            releaseLoginOfferIfHostHasNoMirrors(host: host)
+        }
         let transport = transport(for: host)
         if isLastSession {
             // Drop the transport so a later re-attach builds a fresh one instead of
@@ -1174,7 +1179,7 @@ final class RemoteTmuxController {
 
     func detachAll() {
         // No waiter may outlive the mirrors it was waiting for.
-        for key in authWaitTasks.keys { cancelAuthWait(host: key) }
+        for key in Array(authWaitTasks.keys) { cancelAuthWait(host: key) }
         // Stop every shared view stream first — their channels aren't cached
         // connections, so the loop below can't see them.
         for host in multiplexedViewsByHost.values.map(\.host) { stopMultiplexedHost(host: host) }

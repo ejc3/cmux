@@ -498,7 +498,7 @@ extension RemoteTmuxController {
             controller.v2WorkspaceCreate(params: params)
         }
         Self.logger.info(
-            "reconnect-auth: login workspace for \(host.destination, privacy: .public): \(String(describing: result), privacy: .public)")
+            "reconnect-auth: login workspace for \(host.destination, privacy: .public): \(Self.loginWorkspaceOutcomeLabel(result), privacy: .public)")
         guard case .ok(let payload) = result,
               let workspaceId = (payload as? [String: Any])?["workspace_id"] as? String,
               let loginWorkspace = UUID(uuidString: workspaceId) else {
@@ -544,10 +544,14 @@ extension RemoteTmuxController {
         hostAuth.retire(host)
         if loginOffers.hasOffer(host: key) {
             Self.logger.info("reconnect-auth: \(host.destination, privacy: .public) reconnected; offer released")
-            if let offer = loginOffers.openedWorkspace(host: key) {
-                closeLoginWorkspace(offer.workspace)
-            }
+            // Clear the offer BEFORE closing the workspace. `TabManager.closeWorkspace` reports
+            // every login workspace to `noteLoginWorkspaceClosed`, which cannot tell cmux's own
+            // close from the user's: with the offer still present it takes the decline path on a
+            // successful reconnect and logs a dismissal that never happened. Clearing first makes
+            // that re-entry inert instead of relying on the call below to undo it.
+            let offer = loginOffers.openedWorkspace(host: key)
             loginOffers.noteConnected(host: key)
+            if let offer { closeLoginWorkspace(offer.workspace) }
         }
         // The host is authenticated, so any waiter for it has nothing left to wait on. Its
         // guards would end it on the next tick anyway; cancelling means it stops now rather
@@ -571,9 +575,12 @@ extension RemoteTmuxController {
         let key = host.connectionHash
         guard loginOffers.hasOffer(host: key) else { return }
         guard !sessionMirrors.values.contains(where: { $0.host.connectionHash == key }) else { return }
+        // Release before closing, for the same reason as `noteMirrorConnected`: the close path
+        // re-enters `noteLoginWorkspaceClosed`, and an offer still present sends it down the
+        // decline path for a workspace cmux is retiring itself.
         if let offer = loginOffers.openedWorkspace(host: key) {
-            closeLoginWorkspace(offer.workspace)
             loginOffers.abandon(host: key, generation: offer.generation)
+            closeLoginWorkspace(offer.workspace)
         } else {
             loginOffers.noteConnected(host: key)
         }
@@ -638,8 +645,8 @@ extension RemoteTmuxController {
         host: RemoteTmuxHost, sshArgv: [String]
     ) -> [String: Any] {
         [
-            "title": String(
-                format: String(
+            "title": String.localizedStringWithFormat(
+                String(
                     localized: "remoteTmux.reconnectAuth.workspaceTitle",
                     defaultValue: "Sign in to %@"
                 ),
@@ -676,7 +683,7 @@ extension RemoteTmuxController {
     ///   connection goes back to retrying, and a later failure offers a fresh login. Left
     ///   parked instead, that host would have no route back short of restarting cmux.
     ///
-    /// The interval backs off because a person is slow and each probe forks an `ssh`.
+    /// The wait ends on an event, so there is no interval to tune and no dead time behind one.
     private func awaitAuthenticationThenResume(host: RemoteTmuxHost) {
         let key = host.connectionHash
         let transport = transport(for: host)
@@ -713,29 +720,20 @@ extension RemoteTmuxController {
             // reports unrelated churn too (other hosts' masters live in the same directory).
             let watcher = FileWatcher(path: host.controlSocketPath)
             defer { Task { await watcher.stop() } }
-            // A backstop behind the edge, not instead of it. `FileWatcher` returns nil from its
-            // `open(O_EVTONLY)` and carries on, so under fd exhaustion (EMFILE) the stream exists
-            // with no sources attached and can never yield — the login would complete and this
-            // wait would never hear about it. That is a silent, total failure of the edge, so it
-            // gets a slow re-check rather than trust.
-            //
-            // Deliberately slow: this is a safety net for a rare failure, and every tick it takes
-            // to notice is dead time only in the case where the edge is already broken. If this is
-            // what resumes a mirror, something is wrong that a shorter interval would only hide.
-            let backstop = Task { @MainActor [weak self] in
-                while !Task.isCancelled {
-                    await RemoteTmuxRetryDelay.wait(milliseconds: 30_000)
-                    if Task.isCancelled { return }
-                    guard let self, self.loginOffers.hasOffer(host: key) else { return }
-                    if await transport.isMasterLive() {
-                        Self.logger.warning(
-                            "reconnect-auth: master found by the backstop, not the watcher — the socket watch did not fire")
-                        self.resumeReconnectAfterAuthentication(host: host)
-                        return
-                    }
-                }
+            // The edge has to actually exist. `FileWatcher` returns nil from a failed
+            // `open(O_EVTONLY)` and carries on, so under permission loss or fd exhaustion (EMFILE)
+            // the stream exists with no source behind it and can never yield — the login would
+            // complete and this wait would never hear about it. Ask the watcher instead of putting
+            // a timer behind it: on a failed watch, hand the host back to the connection's own
+            // bounded backoff, which already owns retrying, and a later failure offers the login
+            // again with a fresh watch attempt. The login pane stays up either way, so the user can
+            // still finish signing in.
+            guard await watcher.isWatchingAncestorDirectory else {
+                Self.logger.error(
+                    "reconnect-auth: could not watch the control socket path; falling back to reconnect retries")
+                self?.resumeReconnectAfterAuthentication(host: host)
+                return
             }
-            defer { backstop.cancel() }
             // The master may already be live: the user can finish signing in between the failure
             // that parked this connection and this waiter starting, and an edge that already
             // happened is never delivered. Checking once up front is what stops an event-driven
@@ -852,4 +850,21 @@ extension RemoteTmuxController {
             + "CMUX_REMOTE_TMUX_AUTH=1 \(quoted) && printf '%s\\n' \(ok) || printf '%s\\n' \(failed); exec \(shell) -i"
         return "/bin/sh -c \(RemoteTmuxHost.shellSingleQuoted(payload))"
     }
+
+    /// Names a `V2CallResult` for a public log line without publishing what it carries.
+    /// `.ok` wraps the created workspace's fields and `.err` carries an arbitrary `data`
+    /// value, so interpolating the whole result would put both in the system log. The
+    /// error code is a fixed identifier rather than caller data, so it stays public and
+    /// keeps the line useful for diagnosing a failed login-workspace create.
+    private static func loginWorkspaceOutcomeLabel(
+        _ result: TerminalController.V2CallResult
+    ) -> String {
+        switch result {
+        case .ok:
+            return "ok"
+        case .err(let code, _, _):
+            return "err(\(code))"
+        }
+    }
+
 }
