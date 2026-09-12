@@ -356,4 +356,46 @@ import Testing
             "the command never saw SIGTERM, so it was handed this thread's blocked mask"
         )
     }
+
+    @Test func realProcessKillsADescendantThatOutlivesTheLeader() {
+        // The leader dies on SIGTERM and the descendant it left behind ignores it, so
+        // reading the leader's exit as "the command is gone" leaves that descendant
+        // running with our pipes still open. Teardown has to escalate to the group.
+        let pidPath = NSTemporaryDirectory() + "cmux-upload-teardown-\(UUID().uuidString).pid"
+        defer { try? FileManager.default.removeItem(atPath: pidPath) }
+
+        let result = TerminalCustomUploadRunner().runSync(
+            fileURLs: [URL(fileURLWithPath: "/tmp/a.png")],
+            endpoint: endpoint(),
+            command: "/bin/sh -c 'trap \"\" TERM; echo $$ > \(pidPath); exec /bin/sleep 30' & wait",
+            operation: TerminalImageTransferOperation(),
+            timeout: 1
+        )
+        if case .success = result { Issue.record("timed-out command must fail closed") }
+
+        guard let descendant = Self.recordedPID(atPath: pidPath) else {
+            Issue.record("the descendant never recorded its pid, so this proved nothing")
+            return
+        }
+        let died = Self.waitForExit(descendant, within: 5)
+        if !died { kill(descendant, SIGKILL) }
+        #expect(died, "a descendant that ignores SIGTERM must not survive teardown")
+    }
+
+    private static func recordedPID(atPath path: String) -> pid_t? {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        return pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Whether `pid` is gone within `seconds`. Polled rather than waited on: it is not
+    /// our child, so there is no exit to wait for — the reparented process is reaped by
+    /// launchd and `kill(pid, 0)` starts failing.
+    private static func waitForExit(_ pid: pid_t, within seconds: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if kill(pid, 0) != 0 { return true }
+            usleep(20_000)
+        }
+        return kill(pid, 0) != 0
+    }
 }

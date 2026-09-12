@@ -46,6 +46,63 @@ final class TerminalNotificationPolicyEngineTests: XCTestCase {
         )
     }
 
+    func testHookTimeoutKillsADescendantThatOutlivesTheLeader() async throws {
+        // The hook's own shell dies on SIGTERM while the descendant it left behind
+        // ignores it. Reaping the shell at that point would end the run and cancel the
+        // escalation, leaving the descendant running.
+        let pidPath = NSTemporaryDirectory() + "cmux-hook-teardown-\(UUID().uuidString).pid"
+        defer { try? FileManager.default.removeItem(atPath: pidPath) }
+
+        let request = TerminalNotificationPolicyRequest(
+            tabId: UUID(),
+            surfaceId: UUID(),
+            title: "Title",
+            subtitle: "Subtitle",
+            body: "Body",
+            cwd: FileManager.default.temporaryDirectory.path,
+            isAppFocused: false,
+            isFocusedPanel: false
+        )
+        let hook = CmuxResolvedNotificationHook(
+            id: "teardown",
+            command: "/bin/sh -c 'trap \"\" TERM; echo $$ > \(pidPath); exec /bin/sleep 30' & wait",
+            timeoutSeconds: 1,
+            sourcePath: nil,
+            cwd: FileManager.default.temporaryDirectory.path
+        )
+
+        let result = await evaluate(request: request, hooks: [hook])
+        guard case .failure = result else {
+            XCTFail("a hook that never finishes must fail closed")
+            return
+        }
+
+        guard let descendant = Self.recordedPID(atPath: pidPath) else {
+            XCTFail("the descendant never recorded its pid, so this proved nothing")
+            return
+        }
+        let died = Self.waitForExit(descendant, within: 5)
+        if !died { kill(descendant, SIGKILL) }
+        XCTAssertTrue(died, "a descendant that ignores SIGTERM must not survive teardown")
+    }
+
+    private static func recordedPID(atPath path: String) -> pid_t? {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        return pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
+    /// Whether `pid` is gone within `seconds`. Polled rather than waited on: it is not
+    /// our child, so there is no exit to wait for — the reparented process is reaped by
+    /// launchd and `kill(pid, 0)` starts failing.
+    private static func waitForExit(_ pid: pid_t, within seconds: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if kill(pid, 0) != 0 { return true }
+            usleep(20_000)
+        }
+        return kill(pid, 0) != 0
+    }
+
     func testHookCanDisableDesktopAndTransformBody() async throws {
         let request = TerminalNotificationPolicyRequest(
             tabId: UUID(),
