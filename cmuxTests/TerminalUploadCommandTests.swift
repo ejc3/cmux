@@ -326,4 +326,34 @@ import Testing
         }
         #expect(text == "done")
     }
+
+    @Test func realProcessDoesNotHandTheCommandOurBlockedSignals() {
+        // cmux spawns upload commands from a libdispatch worker, and those threads run
+        // with most signals blocked. A mask survives exec, so a command spawned without
+        // SETSIGMASK inherits it. Blocking SIGTERM here stands in for that worker: the
+        // command traps SIGTERM and records that it arrived, which it can only do if the
+        // mask did not come along.
+        var blocked = sigset_t()
+        sigemptyset(&blocked)
+        sigaddset(&blocked, SIGTERM)
+        var previous = sigset_t()
+        pthread_sigmask(SIG_BLOCK, &blocked, &previous)
+        defer { pthread_sigmask(SIG_SETMASK, &previous, nil) }
+
+        let markerPath = NSTemporaryDirectory() + "cmux-upload-sigmask-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: markerPath) }
+
+        let result = TerminalCustomUploadRunner().runSync(
+            fileURLs: [URL(fileURLWithPath: "/tmp/a.png")],
+            endpoint: endpoint(),
+            command: "trap 'echo caught > \(markerPath); exit 0' TERM; /bin/sleep 30 & wait",
+            operation: TerminalImageTransferOperation(),
+            timeout: 1
+        )
+        if case .success = result { Issue.record("timed-out command must fail closed") }
+        #expect(
+            FileManager.default.fileExists(atPath: markerPath),
+            "the command never saw SIGTERM, so it was handed this thread's blocked mask"
+        )
+    }
 }
