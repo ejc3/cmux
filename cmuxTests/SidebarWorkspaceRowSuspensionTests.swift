@@ -177,23 +177,34 @@ struct SidebarWorkspaceRowSuspensionTests {
     }
 
     @Test
-    func suspendedCellReleasesWorkspaceOwnedByItsActions() {
+    func suspendedCellReleasesWorkspaceOwnedByItsActions() async {
         let model = Self.makeModel()
         let cell = SidebarWorkspaceRowTableCellView()
-        var workspace: Workspace? = Workspace()
-        weak var retainedWorkspace = workspace
-        cell.configure(
-            model: model,
-            actions: Self.makeActions(model: model, workspace: workspace!),
-            isPointerHovering: false,
-            contextMenuDidOpen: {},
-            contextMenuDidClose: {}
-        )
+        weak var retainedWorkspace: Workspace?
+        weak var controlWorkspace: Workspace?
+        do {
+            let workspace = Workspace()
+            retainedWorkspace = workspace
+            cell.configure(
+                model: model,
+                actions: Self.makeActions(model: model, workspace: workspace),
+                isPointerHovering: false,
+                contextMenuDidOpen: {},
+                contextMenuDidClose: {}
+            )
+            workspace.teardownAllPanels()
+            // A workspace outlives its last reference until its torn-down panels finish their
+            // main-queue work. The control goes through the same teardown with nothing holding it,
+            // so once it is gone, only the cell's actions can still hold the workspace.
+            let control = Workspace()
+            controlWorkspace = control
+            control.teardownAllPanels()
+        }
 
-        workspace = nil
+        #expect(await Self.mainQueueSettles { controlWorkspace == nil })
         #expect(retainedWorkspace != nil)
         cell.suspendPresentation()
-        #expect(retainedWorkspace == nil)
+        #expect(await Self.mainQueueSettles { retainedWorkspace == nil })
     }
 
     @Test
@@ -335,18 +346,36 @@ struct SidebarWorkspaceRowSuspensionTests {
             }
         )
 
+        #expect(popoverWindow.isVisible)
+        var popoverCloseCount = 0
+        let closeObserver = NotificationCenter.default.addObserver(
+            forName: NSPopover.didCloseNotification, object: nil, queue: nil
+        ) { _ in popoverCloseCount += 1 }
+        defer { NotificationCenter.default.removeObserver(closeObserver) }
+
         let replacementRoot = NSView(frame: cell.frame)
         window.contentView = replacementRoot
         replacementRoot.addSubview(cell)
 
-        #expect(popoverWindow.isVisible)
+        // AppKit closes a transient popover whose anchor leaves its window. Wait for that close to
+        // finish, so a dismissal write-back it would trigger has already happened by the checks below.
+        let closeDeadline = Date().addingTimeInterval(2)
+        while popoverCloseCount == 0, Date() < closeDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        }
+        #expect(popoverCloseCount == 1)
+        cell.layoutSubtreeIfNeeded()
+
+        #expect(application.windows.contains {
+            !existingWindowIds.contains(ObjectIdentifier($0)) && $0.isVisible
+        })
         #expect(presentationChanges.isEmpty)
         #expect(tokenConsumptions == 0)
     }
 
     @Test
     func checklistDraftCommitsOnlyOnceWhenFocusEndsBeforeSuspension() throws {
-        let model = Self.makeModel(checklistAddFieldActivationToken: 1)
+        let model = Self.makeModel(checklistAddFieldActivationToken: 1, checklistStyle: .inline)
         var additions: [String] = []
         var consumptions = 0
         let cell = SidebarWorkspaceRowTableCellView()
@@ -382,11 +411,11 @@ struct SidebarWorkspaceRowSuspensionTests {
         let workspaceId = UUID()
         let firstModel = Self.makeModel(
             checklistItems: [firstItem, secondItem], isChecklistExpanded: true,
-            editingChecklistItemId: firstItem.id, workspaceId: workspaceId
+            editingChecklistItemId: firstItem.id, checklistStyle: .inline, workspaceId: workspaceId
         )
         let secondModel = Self.makeModel(
             checklistItems: [firstItem, secondItem], isChecklistExpanded: true,
-            editingChecklistItemId: secondItem.id, workspaceId: workspaceId
+            editingChecklistItemId: secondItem.id, checklistStyle: .inline, workspaceId: workspaceId
         )
         var edits: [(UUID, String)] = []
         let actions = Self.makeActions(
@@ -426,7 +455,8 @@ struct SidebarWorkspaceRowSuspensionTests {
         let model = Self.makeModel(
             checklistItems: [item],
             isChecklistExpanded: true,
-            editingChecklistItemId: item.id
+            editingChecklistItemId: item.id,
+            checklistStyle: .inline
         )
         var endedItemIds: [UUID] = []
         var edits: [(itemId: UUID, text: String)] = []
@@ -466,7 +496,8 @@ struct SidebarWorkspaceRowSuspensionTests {
         let model = Self.makeModel(
             checklistItems: [item],
             isChecklistExpanded: true,
-            editingChecklistItemId: item.id
+            editingChecklistItemId: item.id,
+            checklistStyle: .inline
         )
         var endedItemIds: [UUID] = []
         var edits: [(UUID, String)] = []
@@ -495,6 +526,17 @@ struct SidebarWorkspaceRowSuspensionTests {
         for action in postUpdateActions { action() }
         #expect(endedItemIds == [item.id])
         #expect(edits.isEmpty)
+    }
+
+    /// Runs main-queue turns until `condition` holds, for at most `maxTurns` turns.
+    private static func mainQueueSettles(maxTurns: Int = 200, _ condition: () -> Bool) async -> Bool {
+        for _ in 0 ..< maxTurns {
+            if condition() { return true }
+            await withCheckedContinuation { continuation in
+                DispatchQueue.main.async { continuation.resume() }
+            }
+        }
+        return condition()
     }
 
     private static func descendants(of view: NSView) -> [NSView] {
