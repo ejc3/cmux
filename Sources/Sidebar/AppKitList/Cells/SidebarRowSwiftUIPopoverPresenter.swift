@@ -82,6 +82,19 @@ final class SidebarRowSwiftUIPopoverPresenter: NSObject, NSPopoverDelegate {
         popover.performClose(nil)
     }
 
+    /// Closes the popover because its anchor view is leaving the window, which AppKit would otherwise
+    /// do on its own and report as a dismissal. Closes without animating, so the container can present
+    /// it again as soon as the anchor has a window.
+    func closeForAnchorLeavingWindow() {
+        visibleUpdateScheduler.cancel()
+        pendingRoot = nil
+        guard let popover, popover.isShown else { return }
+        closingProgrammatically = true
+        popover.animates = false
+        popover.close()
+        popover.animates = true
+    }
+
     private func applyRootView(_ root: AnyView) {
         hostingController.rootView = AnyView(root.id(presentationCount))
         hostingController.view.invalidateIntrinsicContentSize()
@@ -113,6 +126,12 @@ final class SidebarRowSwiftUIPopoverPresenter: NSObject, NSPopoverDelegate {
     }
 
     func popoverDidClose(_ notification: Notification) {
+        // A close that arrives after the popover was already presented again (anchor reparenting) is
+        // stale and must not tear down the popover that is now showing.
+        if let popover, popover.isShown {
+            closingProgrammatically = false
+            return
+        }
         visibleUpdateScheduler.cancel()
         pendingRoot = nil
         popover = nil

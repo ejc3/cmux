@@ -421,6 +421,19 @@ final class SidebarRowChecklistSection: NSView {
         )
     }
 
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        // AppKit closes a transient popover whose anchor leaves its window, and the external-dismiss
+        // path would then write "not presented" back to the container. When the row only moves to another
+        // superview, close the popover here first and present it again once the row has a window.
+        guard newWindow == nil,
+              popoverPresenter.isShown,
+              model?.isChecklistPopoverPresented == true
+        else { return }
+        popoverPresenter.closeForAnchorLeavingWindow()
+        pendingPopoverPresentation = true
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window != nil, pendingPopoverPresentation {
