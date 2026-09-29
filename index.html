@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Landing ejc3's five open cmux PRs (2026-09-28)</title>
+<title>Landing ejc3's five open cmux PRs (2026-09-29)</title>
 <style>
   *{box-sizing:border-box}
   body{margin:0;font:15px/1.6 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#1c2330;background:#f7f9fb}
@@ -397,7 +397,7 @@
 <div class="wrap">
 <aside>
   <div class="t">cmux PR merge plan</div>
-  <div class="m">manaflow-ai/cmux<br>2026-09-28</div>
+  <div class="m">manaflow-ai/cmux<br>2026-09-29</div>
   <a href="#summary">Summary</a>
   <a href="#users">What users get</a>
   <a href="#stack">The plan: one stack</a>
@@ -413,7 +413,7 @@
 </aside>
 <main>
 <h1 class="big">Landing ejc3's five open cmux PRs</h1>
-<div class="sub">manaflow-ai/cmux &middot; <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7397">#7397</a> <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/8555">#8555</a> <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7214">#7214</a> <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7193">#7193</a> <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/8721">#8721</a> &middot; roll-up <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/12561">#12561</a> &middot; 2026-09-28</div>
+<div class="sub">manaflow-ai/cmux &middot; <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7397">#7397</a> <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/8555">#8555</a> <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7214">#7214</a> <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7193">#7193</a> <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/8721">#8721</a> &middot; roll-up <a class="pr" href="https://github.com/manaflow-ai/cmux/pull/12561">#12561</a> &middot; 2026-09-29</div>
 
 <div class="abstract" id="summary">
 <p>Five PRs are open, and all of them merge cleanly into main with their tests passing. #7397 fixes where sidebar links open and can land any time. The other four improve remote tmux. The biggest, #8721, adds EternalTerminal as a transport and makes remote tmux usable on hosts that ask for a security-key tap on every new connection.</p>
@@ -433,7 +433,7 @@
 
 <section>
 <h2 id="stack">The plan: one stack</h2>
-<p>#8721 is 116 commits and 18,032 added lines, and it already contains #8555 plus its own copies of the routing in #7214 and the host lookup in #7193. Reviewing it whole is a lot, and splitting it into independent PRs would take days of rework because its parts depend on each other. The plan is to land it as a stack instead: eleven commits on one branch, one PR each, landed bottom-up, each one leaving main green. Where the new transports and the multiplexer need an interface, a commit with no behavior change adds it first.</p>
+<p>#8721 is 119 commits and 18,006 added lines, and it already contains #8555 plus its own copies of the routing in #7214 and the host lookup in #7193. Reviewing it whole is a lot, and splitting it into independent PRs would take days of rework because its parts depend on each other. The plan is to land it as a stack instead: eleven PRs, each one commit on the same branch, landed bottom-up, each one leaving main green. Where the new transports and the multiplexer need an interface, a commit with no behavior change adds it first.</p>
 <p>The stack is posted whole and its top matches #8721 exactly, so it is tested as one piece and the early commits are shaped by what the later ones need. Each commit also builds and passes its tests on its own.</p>
 <div class="figure" id="fig-stack" style="max-width:800px">
 <svg viewBox="0 0 780 572" width="100%" role="img" aria-label="The preferred stack, bottom to top: 1 #8555, 2 #7214, 3 #7193, 4 parser fix, 5 transport seam, 6 EternalTerminal, 7 brokers, 8 session-source seam, 9 multiplexer, 10 attach readiness, 11 one connection per attach. Each is one commit on the same branch, and each lands on its own. #7397 targets main separately.">
@@ -457,11 +457,11 @@
   <g stroke="#7d8894" stroke-width="1.5" fill="none" marker-end="url(#ahs)"><path d="M210 68 V74"/><path d="M210 114 V120"/><path d="M210 160 V166"/><path d="M210 206 V212"/><path d="M210 252 V258"/><path d="M210 298 V304"/><path d="M210 344 V350"/><path d="M210 390 V396"/><path d="M210 436 V442"/><path d="M210 482 V488"/><path d="M210 528 V534"/><path d="M620 536 V540"/></g>
   <g font-size="9.5" fill="#6b7885"><text x="400" y="44">dashed: groundwork, one implementation,</text><text x="400" y="56">no behavior change</text><text x="400" y="80">red: changes the default path</text><text x="400" y="104">every PR lands on its own:</text><text x="400" y="116">main builds and passes its tests</text><text x="400" y="128">whether or not the ones above land</text></g>
 </svg>
-<div class="cap">Figure 1. The stack. Each box is one commit and one PR, and each arrow points at the commit it builds on. Commits 1 to 3 are the PRs open today, and 4 to 11 replace #8721. Hover a box for details.</div>
+<div class="cap">Figure 1. The stack. Each box is one commit and one PR, and each arrow points at the commit it builds on. PRs 1 to 3 are the PRs open today, and 4 to 11 replace #8721. Hover a box for details.</div>
 </div>
 
 <div class="scrollx"><table>
-<tr><th>#</th><th>commit</th><th>what it changes for users</th><th>reaches</th><th>product lines</th></tr>
+<tr><th>#</th><th>PR</th><th>what it changes for users</th><th>reaches</th><th>product lines</th></tr>
 <tr><td class="n">1</td><td><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/8555">#8555</a> reconnect sign-in</td><td>A reconnect that needs a password or MFA offers one sign-in per host, and the mirrors come back.</td><td>remote tmux</td><td class="n">830</td></tr>
 <tr><td class="n">2</td><td><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7214">#7214</a> &#8984;N in mirror windows</td><td>&#8984;N in a mirror window opens a session on that host. New Local Workspace opens local work.</td><td>remote tmux</td><td class="n">232</td></tr>
 <tr><td class="n">3</td><td><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7193">#7193</a> host colors</td><td>Each host gets a stable color, and workspaces with the same name show their host.</td><td>beta flags</td><td class="n">481</td></tr>
@@ -471,11 +471,11 @@
 <tr><td class="n">7</td><td>brokers</td><td>EternalTerminal works through a broker command (<code>--broker</code>), including from a cmux started from the Dock or Finder.</td><td>opt-in</td></tr>
 <tr><td class="n">8</td><td>groundwork: session source</td><td>Nothing yet. Lets a mirrored workspace read from a shared connection as well as from its own.</td><td>no change</td><td class="n">~350</td></tr>
 <tr><td class="n">9</td><td>multiplexer</td><td>All of a host's sessions share one connection. &#8984;N creates new sessions over it.</td><td>beta flag</td><td class="n">~2,600</td></tr>
-<tr><td class="n">10</td><td>attach reports failures</td><td>A session that ends or never starts during attach is reported, instead of opening an empty workspace. A host waiting silently for a password gets the sign-in from commit 1.</td><td>remote tmux</td><td class="n">~350</td></tr>
+<tr><td class="n">10</td><td>attach reports failures</td><td>A session that ends or never starts during attach is reported, instead of opening an empty workspace. A host waiting silently for a password gets the sign-in from PR 1.</td><td>remote tmux</td><td class="n">~350</td></tr>
 <tr><td class="n">11</td><td>one connection per attach</td><td>On a host that taps per connection, you tap once per host instead of once per session.</td><td>beta flag</td><td class="n">~600</td></tr>
 </table></div>
 <p class="caveat">"remote tmux" means every user of the remote-tmux beta. "beta flag" and "opt-in" mean only users who turn that option on.</p>
-<p><b>Why this order.</b> The three PRs already open come first, so their review carries over. The start-marker fix depends on nothing and goes next. Each groundwork commit comes just before the commits that use it. The multiplexer and the &#8984;N routing for multiplexed hosts call each other, so they share commit 9. Commit 10 uses parts of the transport and the multiplexer, and commit 11 uses everything below it.</p>
+<p><b>Why this order.</b> The three PRs already open come first, so their review carries over. The start-marker fix depends on nothing and goes next. Each groundwork commit comes just before the commits that use it. The multiplexer and the &#8984;N routing for multiplexed hosts call each other, so they share PR 9. PR 10 uses parts of the transport and the multiplexer, and PR 11 uses everything below it.</p>
 <p><b>Landing it.</b> Land from the bottom. The repo squash-merges, so after each merge the stack branch is rebased onto main, the landed commit drops out, and the stack tool updates the remaining PRs. #7397 is not part of the stack and can merge at any time.</p>
 <p><b>Why it needs the main repo.</b> GitHub compares a PR against a branch, so a stack tool such as ghstack or spr pushes one branch per commit and opens each PR against the commit below it. A PR from a fork can only target branches in the main repo, so those per-commit branches have to live there.</p>
 </section>
@@ -484,19 +484,19 @@
 <h2 id="review">What to review closely</h2>
 <p>Everything in the remote-tmux PRs already sits behind the remote-tmux beta. Most of it sits behind a further flag or option, so it only reaches users who turn that on. These changes reach every remote-tmux user and deserve the closest review:</p>
 <ul>
-<li><b>Reconnect sign-in (commit 1, #8555).</b> Every failed reconnect now goes through a three-way decision: the session is gone, the failure is transient, or the host needs a sign-in. A wrong answer either misses a sign-in or opens one that is not needed. The one-sign-in-per-host rule came from watching the old behavior open six tabs in 76 ms.</li>
-<li><b>&#8984;N in mirror windows (commit 2, #7214).</b> This changes what a familiar shortcut does in one kind of window. The decision is one pure function with a four-row table under test, shown in its section.</li>
-<li><b>Start marker (commit 4).</b> The parser now accepts tmux's control-mode start marker anywhere in a line instead of only at its start.</li>
-<li><b>Attach reports failures (commit 10).</b> Attach now waits until each session has sent its windows, and reports the sessions that never do. It also treats a silent password prompt as needing a sign-in.</li>
+<li><b>Reconnect sign-in (PR 1, #8555).</b> Every failed reconnect now goes through a three-way decision: the session is gone, the failure is transient, or the host needs a sign-in. A wrong answer either misses a sign-in or opens one that is not needed. The one-sign-in-per-host rule came from watching the old behavior open six tabs in 76 ms.</li>
+<li><b>&#8984;N in mirror windows (PR 2, #7214).</b> This changes what a familiar shortcut does in one kind of window. The decision is one pure function with a four-row table under test, shown in its section.</li>
+<li><b>Start marker (PR 4).</b> The parser now accepts tmux's control-mode start marker anywhere in a line instead of only at its start.</li>
+<li><b>Attach reports failures (PR 10).</b> Attach now waits until each session has sent its windows, and reports the sessions that never do. It also treats a silent password prompt as needing a sign-in.</li>
 </ul>
 <p>#7193 runs through every user's sidebar code, but with its flags off it adds one check per row. #7397 only acts on links that match the user's own list, and only on a real click or key press.</p>
 </section>
 
 <section>
 <h2 id="p7397"><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7397">#7397</a> Send sidebar links through the external-open rules, and escape only on a real user event</h2>
-<div class="kv"><b>Branch</b><span><code>browser-external-open-host-patterns</code> <code>258e3f76ad</code></span><b>Size</b><span>3 commits &middot; 12 files &middot; +562 / &minus;23 (79 product source lines; the rest is tests and fixtures)</span><b>State</b><span>Ready for review &middot; 19 reviews &middot; 0 unresolved threads</span><b>Risk</b><span><span class="risk r-low">low</span></span></div>
+<div class="kv"><b>Branch</b><span><code>browser-external-open-host-patterns</code> <code>28adbe1433</code></span><b>Size</b><span>4 commits &middot; 12 files &middot; +573 / &minus;23 (79 product source lines; the rest is tests and fixtures)</span><b>State</b><span>Ready for review &middot; 19 reviews &middot; 0 unresolved threads</span><b>Risk</b><span><span class="risk r-low">low</span></span></div>
 <p><b>What it does.</b> <code>browser.urlsToAlwaysOpenExternally</code> lists sites that cmux opens in the system browser instead of its built-in browser, which matters for sites that only work in a managed browser. On main, terminal links, the intercepted <code>open</code> command and clicks inside the built-in browser follow that list. The sidebar's pull-request and port links are the exception: they open in the built-in browser and dead-end. This PR makes them follow the list too. It also guards against pages: a link goes to the system browser only while a real key or mouse event is in flight, and a download never does, so a script cannot open the system browser on its own.</p>
-<p><b>How it works.</b> The first of three commits routes sidebar pull-request and port links through a new <code>linkEscapesToSystemBrowser(_:)</code>, limited to web schemes. The second requires an AppKit key, left-mouse or middle-mouse event in flight before any link escapes (<code>hasUserActivation</code>), and never lets a download escape: WebKit reports a script's <code>click()</code> on an anchor as a link activation, so without this a page could open the system browser whenever it liked. The third adds UI tests with local fixture pages and a DEBUG capture sink, so CI observes the open without launching a browser.</p>
+<p><b>How it works.</b> The first of four commits routes sidebar pull-request and port links through a new <code>linkEscapesToSystemBrowser(_:)</code>, limited to web schemes. The second requires an AppKit key, left-mouse or middle-mouse event in flight before any link escapes (<code>hasUserActivation</code>), and never lets a download escape: WebKit reports a script's <code>click()</code> on an anchor as a link activation, so without this a page could open the system browser whenever it liked. The third adds UI tests with local fixture pages and a DEBUG capture sink, so CI observes the open without launching a browser. The fourth makes the two link tests click through accessibility, the way a person does, because the socket click runs JavaScript and the new check refuses it.</p>
 <div class="figure">
 <svg viewBox="0 0 660 120" width="100%" role="img" aria-label="Link escape decision: a link activation escapes to the system browser only if it matches a rule, an AppKit user event is in flight, and it is not a download. Otherwise it stays embedded.">
   <defs><marker id="ah4" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#7d8894"/></marker></defs>
@@ -541,7 +541,7 @@
 <div class="cap">Figure 3. The reconnect paths after #8555. There is no deadline on the login wait: an MFA push can take minutes, so the wait ends on state (master up, host has no mirror left, or login closed unfinished), never on a timer.</div>
 </div>
 <h3>How to merge</h3>
-<p>It is commit 1 of the stack. Without a stack, take it out of draft and squash merge it before #8721. #8721 already carries all of it, so once this lands, updating #8721 drops those changes as already applied. Landing #8721 first instead would make this PR a duplicate to close.</p>
+<p>It is PR 1 of the stack. Without a stack, take it out of draft and squash merge it before #8721. #8721 already carries all of it, so once this lands, updating #8721 drops those changes as already applied. Landing #8721 first instead would make this PR a duplicate to close.</p>
 </section>
 
 <section>
@@ -558,13 +558,13 @@
 </table></div>
 <p class="caveat">The table is the truth table <code>RemoteTmuxNewWorkspaceHostRoutingTests</code> covers; <code>RemoteTmuxNewWorkspaceRoutingTests</code> covers the menu item.</p>
 <h3>How to merge</h3>
-<p>It is commit 2 of the stack. Without a stack, squash merge it after #8555.</p>
+<p>It is PR 2 of the stack. Without a stack, squash merge it after #8555.</p>
 <div class="callout info">#8721 carries its own later version of <code>handleNewWorkspaceRequested</code>, with a branch for multiplexed hosts that creates the session in-band over the shared stream. When #8721 is updated after this lands, keep that multiplexed branch and this PR's <code>wouldNewWorkspaceSpawnRemote</code>. The roll-up (#12561) shows the combined result.</div>
 </section>
 
 <section>
 <h2 id="p7193"><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7193">#7193</a> remote-tmux: tint remote workspace sidebar rows by host (origin colors, beta)</h2>
-<div class="kv"><b>Branch</b><span><code>remote-tmux-origin-colors</code> <code>f4a985c90e</code></span><b>Size</b><span>16 commits &middot; 23 files &middot; +1,270 / &minus;29 (481 product source lines)</span><b>State</b><span>Draft &middot; 10 reviews &middot; 0 unresolved threads</span><b>Risk</b><span><span class="risk r-low">low</span></span></div>
+<div class="kv"><b>Branch</b><span><code>remote-tmux-origin-colors</code> <code>31b60f1aa8</code></span><b>Size</b><span>17 commits &middot; 23 files &middot; +1,270 / &minus;29 (481 product source lines)</span><b>State</b><span>Draft &middot; 10 reviews &middot; 0 unresolved threads</span><b>Risk</b><span><span class="risk r-low">low</span></span></div>
 <p><b>What it does.</b> Users mirroring several hosts can tell their workspaces apart at a glance. With <code>remoteTmux.originColors.beta.enabled</code> on, each remote workspace's sidebar row and tab takes a stable color for its host, the same in every window, and a color the user picked always wins. With <code>remoteTmux.originHostTitles.beta.enabled</code> on, two workspaces with the same title, such as two <code>main</code> sessions on different hosts, show their host after the title, without the domain the hosts share.</p>
 <p><b>How it works.</b> <code>RemoteHostColorRegistry</code>, owned by the controller, maps a destination to a palette slot: an FNV-1a hash picks the start, a collision probes to the next free slot, and the palette was chosen so neighbors stay distinguishable on the sidebar rail. The color and the host suffix are resolved above the row boundary into the row snapshot, and both are part of the snapshot's presentation key, so a flag toggle rebuilds exactly the rows whose color changed.</p>
 <div class="figure">
@@ -584,13 +584,13 @@
 <div class="cap">Figure 4. How a host's color reaches a sidebar row. The cache box is main's, and the per-row key is this PR's, applied in the cache's reconcile step.</div>
 </div>
 <h3>How to merge</h3>
-<p>It is commit 3 of the stack. Without a stack, squash merge it after #7214. They share <code>RemoteTmuxController.swift</code>, but in adjacent functions. The color and the host suffix live in main's <code>SidebarRowSnapshotCache</code>: <code>reconcile</code> takes a per-row key, and the targeted refresh also rebuilds rows whose host suffix went stale when another workspace was renamed. With both flags off, the per-row key adds one flag check per row.</p>
+<p>It is PR 3 of the stack. Without a stack, squash merge it after #7214. They share <code>RemoteTmuxController.swift</code>, but in adjacent functions. The color and the host suffix live in main's <code>SidebarRowSnapshotCache</code>: <code>reconcile</code> takes a per-row key, and the targeted refresh also rebuilds rows whose host suffix went stale when another workspace was renamed. With both flags off, the per-row key adds one flag check per row.</p>
 <div class="callout info">A mirror row never draws before its host is known. <code>mirrorSession</code> adds the workspace and registers its mirror, host included, in one synchronous pass on the main thread, and the sidebar rebuilds snapshots from a SwiftUI <code>onChange</code> on the workspace list, which runs in a later view update. A session rename re-keys the mirror but keeps the same host.</div>
 </section>
 
 <section>
 <h2 id="p8721"><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/8721">#8721</a> remote-tmux: EternalTerminal support, and one shared connection for hosts where every connection costs a tap</h2>
-<div class="kv"><b>Branch</b><span><code>remote-tmux-one-connection</code> <code>40b7c62cb4</code></span><b>Size</b><span>116 commits &middot; 75 files &middot; +18,032 / &minus;145 (6,973 product source lines, 5,592 test lines, 4,310 docs and harness lines)</span><b>State</b><span>Draft &middot; 7 reviews &middot; 0 unresolved threads</span><b>Risk</b><span><span class="risk r-high">high</span></span></div>
+<div class="kv"><b>Branch</b><span><code>remote-tmux-one-connection</code> <code>a36a14d9c7</code></span><b>Size</b><span>119 commits &middot; 75 files &middot; +18,006 / &minus;145 (6,957 product source lines, 5,582 test lines, 4,310 docs and harness lines)</span><b>State</b><span>Draft &middot; 7 reviews &middot; 0 unresolved threads</span><b>Risk</b><span><span class="risk r-high">high</span></span></div>
 <p><b>What it does.</b> Some environments allow only one session on an ssh ControlMaster and ask for a security-key tap or MFA on every new connection. Today's remote tmux cannot work there: it opens a separate <code>tmux -CC</code> connection per mirrored session, so each session costs a tap, and each network drop costs a tap per session again. #8721 makes those hosts usable. With <code>remoteTmux.multiplexer.beta.enabled</code> on, every mirrored session from a host rides one connection, so the user taps once instead of once per session. EternalTerminal, chosen per host and usable through a broker, keeps that one connection alive across a network change or a laptop sleep, where ssh would drop it and need a new tap. That also works from a cmux launched from the Dock or Finder. And if the remote session closes or never starts while cmux is connecting, cmux tells the user what happened. Today it opens a workspace with nothing from the host in it, only a local shell. The branch also carries the work of #8555 and of two closed PRs, #8428 (the session multiplexer) and #8556 (the transport seam).</p>
 <p><b>How it works.</b> The figure shows the two transports. The sections after it cover the changes that run without a flag, the fixes that exist only with the multiplexer on, and the brokered EternalTerminal fix.</p>
 <div class="figure" style="max-width:720px">
@@ -632,7 +632,7 @@
 <p>Two fixes that read like default-path changes are multiplexer-only. A raw query now ends three ways (lines, a <code>%error</code>, or silence) and only silence triggers the reconcile's retry. Main has no raw-query path, and on this branch only the view connection and the session channel call it. Closing a host's last workspace tears down the shared stream and master before looking for a tab manager, and the shared stream exists only when the multiplexer is on.</p>
 <p><b>Brokered EternalTerminal from a Dock-launched app.</b> A broker that starts <code>et</code> by name finds it through PATH, and an app started from the Dock or Finder inherits launchd's minimal PATH, which lacks <code>/usr/local/bin</code> and <code>/opt/homebrew/bin</code>. Every <code>cmux ssh-tmux --transport et --broker &lt;name&gt;</code> from such an app failed at once. <code>5e44722d1a</code> lets a transport profile supply its child's environment: the ET profile keeps the user's PATH in order and appends the directories <code>et</code> installs to, and ssh inherits the environment unchanged.</p>
 <h3>How to merge</h3>
-<p>Land it through the stack as commits 4 to 11. Without a stack, land it whole, last among the remote-tmux PRs. Main is merged into the branch rather than rebased under it, because its 116 commits are its review record, and the squash merge flattens it anyway. Three commits adapt it to main's pane colors and titles: <code>RemoteTmuxSessionSource</code> gains <code>paneTitleMetadataByPane</code>, <code>setPaneColors</code> and <code>removePaneColors</code>, and the observer struct gains <code>onPaneTitleChanged</code>, scoped by pane in the multiplexed channel.</p>
+<p>Land it through the stack as PRs 4 to 11. Without a stack, land it whole, last among the remote-tmux PRs. Main is merged into the branch rather than rebased under it, because its 119 commits are its review record, and the squash merge flattens it anyway. Three commits adapt it to main's pane colors and titles: <code>RemoteTmuxSessionSource</code> gains <code>paneTitleMetadataByPane</code>, <code>setPaneColors</code> and <code>removePaneColors</code>, and the observer struct gains <code>onPaneTitleChanged</code>, scoped by pane in the multiplexed channel.</p>
 </section>
 
 <section>
@@ -643,15 +643,15 @@
 
 <section>
 <h2 id="verify">Testing</h2>
-<p>Each PR was merged onto main on 2026-09-28, built with Xcode 26.2, and its test suites run. Every run passed.</p>
+<p>Each PR was merged onto main on 2026-09-28 or 2026-09-29, built with Xcode 26.2, and its test suites run. Every run passed.</p>
 <div class="scrollx"><table>
 <tr><th>tree</th><th>suites</th><th>result</th></tr>
 <tr><td><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7397">#7397</a></td><td>link-open settings</td><td>28 pass</td></tr>
 <tr><td><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/8555">#8555</a></td><td>reconnect sign-in</td><td>60 pass</td></tr>
 <tr><td><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7214">#7214</a></td><td>&#8984;N routing and the menu item</td><td>13 pass</td></tr>
 <tr><td><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/7193">#7193</a></td><td>host colors, host titles and five sidebar suites</td><td>132 pass</td></tr>
-<tr><td><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/8721">#8721</a></td><td>23 remote-tmux suites, including the multiplexer and transport fuzzers</td><td>339 pass</td></tr>
-<tr><td>all five together (<a class="pr" href="https://github.com/manaflow-ai/cmux/pull/12561">#12561</a>)</td><td>13 suites across the five PRs</td><td>281 pass</td></tr>
+<tr><td><a class="pr" href="https://github.com/manaflow-ai/cmux/pull/8721">#8721</a></td><td>23 remote-tmux suites, including the multiplexer and transport fuzzers</td><td>341 pass</td></tr>
+<tr><td>all five together (<a class="pr" href="https://github.com/manaflow-ai/cmux/pull/12561">#12561</a>)</td><td>13 suites across the five PRs</td><td>283 pass</td></tr>
 </table></div>
 <p>The PATH fix for brokered EternalTerminal was also tested against two broken versions of itself. With the fix, all 60 transport tests pass. With the process ignoring the new environment, 1 fails, and with the PATH rule removed, 4 fail. A build with the fix, started from Finder, connected to a real host through a broker; before the fix, the same command failed at once.</p>
 </section>
@@ -672,10 +672,10 @@
     <text x="414" y="302">2</text><text x="309" y="272">1</text>
   </g>
   <!-- 8721 containing 8555 -->
-  <g class="node" data-tip="#8721 remote-tmux: one connection per multiplexed attach, readiness, EternalTerminal transport, multiplexer. 116 commits, 75 files, +18,032 / -145. Draft.">
+  <g class="node" data-tip="#8721 remote-tmux: one connection per multiplexed attach, readiness, EternalTerminal transport, multiplexer. 119 commits, 75 files, +18,006 / -145. Draft.">
     <circle cx="215" cy="180" r="92" fill="#eef3fb" stroke="#1a73e8" stroke-width="2"/>
     <text x="215" y="120" text-anchor="middle" font-size="14" font-weight="700" fill="#1155cc">#8721</text>
-    <text x="215" y="137" text-anchor="middle" font-size="10.5" fill="#5d6d7e">+18,032 lines &middot; 116 commits</text>
+    <text x="215" y="137" text-anchor="middle" font-size="10.5" fill="#5d6d7e">+18,006 lines &middot; 119 commits</text>
   </g>
   <g class="node" data-tip="#8555 offer a login when a reconnect can't authenticate. 15 commits, 16 files, +2,251. All 16 files are also changed by #8721, which carries 13 of these commits verbatim, re-resolves one, and leaves out the last, a test adaptation to main.">
     <circle cx="215" cy="205" r="44" fill="#fff" stroke="#6b8fc7" stroke-width="1.5" stroke-dasharray="3 3"/>
@@ -704,16 +704,16 @@
 
 <div class="scrollx"><table>
 <tr><th>PR</th><th>branch on the fork (ejc3/cmux)</th><th>head</th><th>commits</th></tr>
-<tr><td>#7397</td><td class="n">browser-external-open-host-patterns</td><td class="n">258e3f76ad</td><td class="n">3</td></tr>
+<tr><td>#7397</td><td class="n">browser-external-open-host-patterns</td><td class="n">28adbe1433</td><td class="n">4</td></tr>
 <tr><td>#8555</td><td class="n">remote-tmux-reconnect-auth</td><td class="n">fef5d498fd</td><td class="n">15</td></tr>
 <tr><td>#7214</td><td class="n">remote-tmux-new-local-workspace</td><td class="n">9c83edb3ed</td><td class="n">7</td></tr>
-<tr><td>#7193</td><td class="n">remote-tmux-origin-colors</td><td class="n">f4a985c90e</td><td class="n">16</td></tr>
-<tr><td>#8721</td><td class="n">remote-tmux-one-connection</td><td class="n">40b7c62cb4</td><td class="n">116</td></tr>
-<tr><td>#12561 (all five)</td><td class="n">all-ej-changes</td><td class="n">357e8c0b62</td><td>one merge per PR</td></tr>
+<tr><td>#7193</td><td class="n">remote-tmux-origin-colors</td><td class="n">31b60f1aa8</td><td class="n">17</td></tr>
+<tr><td>#8721</td><td class="n">remote-tmux-one-connection</td><td class="n">a36a14d9c7</td><td class="n">119</td></tr>
+<tr><td>#12561 (all five)</td><td class="n">all-ej-changes</td><td class="n">ca967d7ace</td><td>one merge per PR</td></tr>
 </table></div>
 <p><b>Building main locally on Xcode 26.2.</b> The app build fails with "type mismatch of function ... used in a swift module" unless <code>CMUX_RELOAD_APP_EMIT_MODULE=1</code> is set, and plain main fails the same way. CI uses Xcode 26.6 on macOS 26 and 26.3 on macOS 15.</p>
 </section>
-<footer>Written 2026-09-28 from the PRs, branches and test runs named on the page.</footer>
+<footer>Written 2026-09-29 from the PRs, branches and test runs named on the page.</footer>
 </main>
 </div>
 <script>
