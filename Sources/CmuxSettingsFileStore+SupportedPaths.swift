@@ -239,5 +239,6 @@ extension CmuxSettingsFileStore {
         "remoteTmux.beta.newWorkspaceOnHost.enabled",
         "remoteTmux.beta.originHostTitles.enabled",
         "remoteTmux.beta.originColors.enabled",
+        "remoteTmux.multiplexer.beta.enabled",
     ]
 }
