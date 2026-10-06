@@ -67,6 +67,24 @@ extension RemoteTmuxController {
             AppDelegate.shared?.mainWindowContexts.values
                 .contains(where: { $0.tabManager === manager }) == true
         }
+        // A host on one shared connection gets the session over that connection: a
+        // one-shot ssh would be a second connection, which such a host refuses or
+        // prompts for. The reply carries the new session's name, the shared
+        // connection mirrors it on its next reconcile, and the pending select makes
+        // that workspace the selected one if the user is still on the tab they asked from.
+        if let view = multiplexedViewsByHost[host.connectionHash] {
+            guard let name = await view.createWorkspaceReturningName() else {
+                guard managerIsLive() else { return }
+                newSessionEnvironment.reportFailure(host, .create(detail: ""), manager)
+                return
+            }
+            guard multiplexedViewsByHost[host.connectionHash] === view else { return }
+            var intents = multiplexIntentsByHost[host.connectionHash] ?? .init()
+            intents.pendingSelect = .init(sessionName: name, originatingTabId: request.activeTabId)
+            storeMultiplexIntents(intents, hostHash: host.connectionHash)
+            view.requestReconcile()
+            return
+        }
         // Create a detached session and read back its (auto-assigned) name.
         let name: String
         do {
