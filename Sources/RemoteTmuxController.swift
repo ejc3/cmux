@@ -52,6 +52,10 @@ final class RemoteTmuxController {
     /// stored properties; the ledger type stays next to its users.)
     var hostAuth = HostAuthLedger()
 
+    /// How long a shared connection's attach may stay quiet in each phase before it is
+    /// called stalled. Given to each new view; a test shortens these.
+    var attachQuietLimits = RemoteTmuxAttachProgress.QuietLimits.standard
+
     /// The outside steps of a routed New Workspace.
     var newSessionEnvironment: RemoteTmuxNewSessionEnvironment
 
