@@ -219,6 +219,20 @@
               "properties": {
                 "enabled": { "type": "boolean", "default": true, "description": "With a remote tmux workspace selected, New Workspace starts a tmux session on that workspace's host." }
               }
+            },
+            "originColors": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": false, "description": "Tint each remote workspace's sidebar row with a stable per-host color." }
+              }
+            },
+            "originHostTitles": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": false, "description": "Show a remote workspace's host after its title when another workspace has the same title." }
+              }
             }
           }
         }
