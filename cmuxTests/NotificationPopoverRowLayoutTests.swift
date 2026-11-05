@@ -1,4 +1,6 @@
 import AppKit
+import CmuxSettings
+import CmuxSettingsUI
 import CmuxTerminal
 import CmuxTerminalCore
 import Foundation
@@ -232,5 +234,54 @@ struct NotificationPopoverRowAccessibilityTests {
               let attributes = object.perform(names)?.takeUnretainedValue() as? [String],
               attributes.contains(attribute.rawValue) else { return nil }
         return object.perform(legacy, with: attribute.rawValue)?.takeUnretainedValue()
+    }
+}
+
+/// What a popover host gives the notifications popover's content.
+@MainActor
+@Suite("Notifications popover host root", .serialized)
+struct NotificationsPopoverHostRootTests {
+    /// The popover reads the modifier-hold hint setting with `@LiveSetting`, which sees the
+    /// user's value only through the settings runtime in its environment. Without it the setting
+    /// reads its default, so hints showed in the popover with the setting turned off.
+    @Test func thePopoverContentGetsTheSettingsRuntime() throws {
+        let suiteName = "NotificationsPopoverHostRootTests.\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let runtime = SettingsRuntime(
+            catalog: SettingCatalog(),
+            userDefaultsStore: UserDefaultsSettingsStore(defaults: try #require(UserDefaults(suiteName: suiteName))),
+            jsonStore: JSONConfigStore(fileURL: directory.appendingPathComponent("settings.json")),
+            secretStore: SecretFileStore(baseDirectory: directory.appendingPathComponent("secrets")),
+            errorLog: SettingsErrorLog()
+        )
+        var seen: SettingsRuntime?
+        _ = NSApplication.shared
+        let host = NSHostingView(rootView: NotificationsPopoverView.hostRoot(
+            RuntimeProbe { seen = $0 }, settingsRuntime: runtime
+        ))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
+            styleMask: [.borderless], backing: .buffered, defer: true
+        )
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = host
+        host.frame = NSRect(x: 0, y: 0, width: 10, height: 10)
+        for _ in 0..<20 where seen == nil {
+            host.layoutSubtreeIfNeeded()
+            _ = RunLoop.main.run(mode: .default, before: Date(timeIntervalSinceNow: 0.01))
+        }
+        #expect(seen === runtime)
+    }
+
+    private struct RuntimeProbe: View {
+        @Environment(\.settingsRuntime) private var runtime
+        let report: (SettingsRuntime?) -> Void
+
+        var body: some View {
+            Color.clear.onAppear { report(runtime) }
+        }
     }
 }

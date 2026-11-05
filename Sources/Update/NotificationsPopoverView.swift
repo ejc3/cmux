@@ -38,6 +38,16 @@ final class NotificationsPopoverDrawnRows {
     }
 }
 
+extension NotificationsPopoverView {
+    /// `content` as a popover host shows it. The settings runtime is what lets the popover's
+    /// `@LiveSetting`s read the user's values; without it they read their catalog defaults.
+    static func hostRoot<Content: View>(_ content: Content, settingsRuntime: SettingsRuntime?) -> some View {
+        content
+            .environment(\.settingsRuntime, settingsRuntime)
+            .cmuxAccentColorEnvironment()
+    }
+}
+
 struct NotificationsPopoverView: View {
     @ObservedObject var notificationStore: TerminalNotificationStore
     let drawnRows: NotificationsPopoverDrawnRows

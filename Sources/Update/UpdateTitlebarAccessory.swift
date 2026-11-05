@@ -2269,19 +2269,20 @@ final class TitlebarControlsAccessoryViewController: NSTitlebarAccessoryViewCont
         notificationsPopoverRows = drawnRows
         // Recreate content view each time to avoid stale observers when popover is hidden
         let hostingController = NSHostingController(
-            rootView: NotificationsPopoverView(
-                notificationStore: notificationStore,
-                drawnRows: drawnRows,
-                onDismiss: { [weak notificationsPopover] in
-                    notificationsPopover?.performClose(nil)
-                },
-                onOpenPhoneForwarding: { [weak notificationsPopover] in
-                    notificationsPopover?.performClose(nil)
-                    openPhoneForwardingSettings(in: NSApp.windows.first { ObjectIdentifier($0) == windowIdentifier })
-                }
+            rootView: NotificationsPopoverView.hostRoot(
+                NotificationsPopoverView(
+                    notificationStore: notificationStore,
+                    drawnRows: drawnRows,
+                    onDismiss: { [weak notificationsPopover] in
+                        notificationsPopover?.performClose(nil)
+                    },
+                    onOpenPhoneForwarding: { [weak notificationsPopover] in
+                        notificationsPopover?.performClose(nil)
+                        openPhoneForwardingSettings(in: NSApp.windows.first { ObjectIdentifier($0) == windowIdentifier })
+                    }
+                ),
+                settingsRuntime: settingsRuntime
             )
-            .environment(\.settingsRuntime, settingsRuntime)
-            .cmuxAccentColorEnvironment()
         )
         hostingController.view.wantsLayer = true
         hostingController.view.layer?.backgroundColor = .clear
@@ -2786,19 +2787,20 @@ final class UpdateTitlebarAccessoryController {
         drawnRows.anchorWindowNumber = window.windowNumber
         detachedNotificationsPopoverRows = drawnRows
         popover.contentViewController = NSHostingController(
-            rootView: NotificationsPopoverView(
-                notificationStore: TerminalNotificationStore.shared,
-                drawnRows: drawnRows,
-                onDismiss: { [weak popover] in
-                    popover?.performClose(nil)
-                },
-                onOpenPhoneForwarding: { [weak popover] in
-                    popover?.performClose(nil)
-                    openPhoneForwardingSettings(in: NSApp.windows.first { ObjectIdentifier($0) == windowIdentifier })
-                }
+            rootView: NotificationsPopoverView.hostRoot(
+                NotificationsPopoverView(
+                    notificationStore: TerminalNotificationStore.shared,
+                    drawnRows: drawnRows,
+                    onDismiss: { [weak popover] in
+                        popover?.performClose(nil)
+                    },
+                    onOpenPhoneForwarding: { [weak popover] in
+                        popover?.performClose(nil)
+                        openPhoneForwardingSettings(in: NSApp.windows.first { ObjectIdentifier($0) == windowIdentifier })
+                    }
+                ),
+                settingsRuntime: settingsRuntime
             )
-            .environment(\.settingsRuntime, settingsRuntime)
-            .cmuxAccentColorEnvironment()
         )
 
         contentView.layoutSubtreeIfNeeded()
