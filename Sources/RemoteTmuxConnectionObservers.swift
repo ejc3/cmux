@@ -27,6 +27,10 @@ final class RemoteTmuxConnectionObservers {
     private var exitObservers: [Token: () -> Void] = [:]
     private var stateObservers: [Token: (RemoteTmuxControlConnection.ConnectionState) -> Void] = [:]
     private var authRequiredObservers: [Token: ([String]) -> Bool] = [:]
+    /// Nesting depth of ``coalescingTopologyNotifications(_:)``.
+    private var topologyCoalescingDepth = 0
+    /// A topology notification asked for inside a coalescing scope and not yet delivered.
+    private var topologyNotificationPending = false
 
     /// Registers a consumer's callbacks and returns a token to deregister them.
     ///
@@ -123,6 +127,7 @@ final class RemoteTmuxConnectionObservers {
 
     /// Fans `%output` bytes out to every pane-output observer.
     func emitPaneOutput(_ paneId: Int, _ data: Data) {
+        flushPendingTopologyNotification()
         // Snapshot before iterating: a callback may unregister an observer (mutating
         // the dict) synchronously, which would trap on the live collection.
         for callback in Array(paneOutputObservers.values) { callback(paneId, data) }
@@ -131,6 +136,7 @@ final class RemoteTmuxConnectionObservers {
     /// Fans a typed seed to seed-aware observers. Output-only observers receive
     /// one compatibility write, never both paths.
     func emitPaneSeed(_ paneId: Int, _ seed: RemoteTmuxPaneSeed) {
+        flushPendingTopologyNotification()
         for callback in Array(paneSeedObservers.values) { callback(paneId, seed) }
         for (token, callback) in Array(paneOutputObservers)
         where paneSeedObservers[token] == nil {
@@ -140,46 +146,88 @@ final class RemoteTmuxConnectionObservers {
 
     /// Fans a pane's working directory out to every cwd observer.
     func emitPaneCwd(_ paneId: Int, _ path: String) {
+        flushPendingTopologyNotification()
         for callback in Array(paneCwdObservers.values) { callback(paneId, path) }
     }
 
     /// Fans a pane's reflow classification out to every reflow observer.
     func emitPaneReflow(_ paneId: Int, _ noReflow: Bool) {
+        flushPendingTopologyNotification()
         for callback in Array(paneReflowObservers.values) { callback(paneId, noReflow) }
     }
 
     /// Fans one pane's title change out to every title observer.
     func emitPaneTitleChanged(_ paneId: Int) {
+        flushPendingTopologyNotification()
         for callback in Array(paneTitleObservers.values) { callback(paneId) }
     }
 
     /// Fans a window's new active pane out to every active-pane observer.
     func emitActivePaneChanged(_ windowId: Int, _ paneId: Int) {
+        flushPendingTopologyNotification()
         for callback in Array(activePaneObservers.values) { callback(windowId, paneId) }
     }
 
     /// Notifies every observer that the remote session name changed.
     func emitSessionChanged(oldName: String, newName: String) {
+        flushPendingTopologyNotification()
         for callback in Array(sessionChangedObservers.values) { callback(oldName, newName) }
     }
 
     /// Fans a pane's raw `@cmux_agent` value out to every agent-status observer.
     func emitPaneAgent(_ paneId: Int, _ rawValue: String) {
+        flushPendingTopologyNotification()
         for callback in Array(paneAgentObservers.values) { callback(paneId, rawValue) }
     }
 
     /// Notifies every topology observer that the window/pane layout changed.
+    ///
+    /// Inside ``coalescingTopologyNotifications(_:)`` the notification is held and delivered
+    /// once, before the next other event or when the scope ends.
     func notifyTopologyChanged() {
+        if topologyCoalescingDepth > 0 {
+            topologyNotificationPending = true
+            return
+        }
+        deliverTopologyChanged()
+    }
+
+    /// Runs `body` with each run of adjacent topology notifications collapsed into one.
+    ///
+    /// Topology observers read the connection's current state rather than a delta, so the last
+    /// notification of a run tells them everything the earlier ones would have. Order with every
+    /// other event is kept: any other emission first delivers a held topology notification, so
+    /// an observer never sees, for example, `%output` for a pane before the topology that
+    /// published it. A held notification is delivered when the outermost scope ends, never later.
+    func coalescingTopologyNotifications(_ body: () -> Void) {
+        topologyCoalescingDepth += 1
+        defer {
+            topologyCoalescingDepth -= 1
+            if topologyCoalescingDepth == 0 { flushPendingTopologyNotification() }
+        }
+        body()
+    }
+
+    /// Delivers a held topology notification now, if there is one.
+    func flushPendingTopologyNotification() {
+        guard topologyNotificationPending else { return }
+        topologyNotificationPending = false
+        deliverTopologyChanged()
+    }
+
+    private func deliverTopologyChanged() {
         for callback in Array(topologyObservers.values) { callback() }
     }
 
     /// Notifies observers that reconnect commands are safe and the prior claims were reseeded.
     func notifyReconnectReady() {
+        flushPendingTopologyNotification()
         for callback in Array(reconnectReadyObservers.values) { callback() }
     }
 
     /// Notifies every exit observer that the connection permanently ended.
     func notifyExit() {
+        flushPendingTopologyNotification()
         // Snapshot: notifyExit -> handleSessionEndedRemotely -> detachObserver ->
         // removeObserver mutates exitObservers synchronously during this loop.
         for callback in Array(exitObservers.values) { callback() }
@@ -187,6 +235,7 @@ final class RemoteTmuxConnectionObservers {
 
     /// Notifies every connection-state observer of a transition.
     func notifyStateChanged(_ state: RemoteTmuxControlConnection.ConnectionState) {
+        flushPendingTopologyNotification()
         for callback in Array(stateObservers.values) { callback(state) }
     }
 
@@ -204,6 +253,7 @@ final class RemoteTmuxConnectionObservers {
     /// host's login — silently suppresses the caller's fallback, leaving the connection
     /// parked with no retry and no waiter. That is a host stranded until cmux restarts.
     func notifyAuthRequired(sshArgv: [String]) -> Bool {
+        flushPendingTopologyNotification()
         var presented = false
         for callback in Array(authRequiredObservers.values) {
             // Every observer runs: `||` would short-circuit and skip the rest.

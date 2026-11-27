@@ -157,6 +157,15 @@ final class RemoteTmuxControlConnection {
     var windowTitleRowPlacements: [Int: RemoteTmuxPaneTitleRowPlacement] = [:]
     /// Layouts awaiting authoritative pane rectangles before publication.
     var pendingLayouts: [Int: RemoteTmuxPendingLayout] = [:]
+    /// The raw layout behind each verified tree in `windowsByID` and `initialBatchStaged`,
+    /// recorded when its rects reply published it on the current control stream. A window list
+    /// or `%layout-change` that repeats this layout needs no new rects fetch. A new stream
+    /// starts empty, so a reconnect still refetches every window.
+    var verifiedRawLayouts: [Int: RemoteTmuxRawWindowLayout] = [:]
+    /// Windows whose pane rects changed while their layout string did not (a
+    /// `pane-border-status` change). Their next staging fetches rects even when the layout
+    /// matches ``verifiedRawLayouts``.
+    var windowsOwingRectsRefetch: Set<Int> = []
     /// Window ids in the initial atomic topology publication batch.
     var initialBatchAwaiting: Set<Int>?
     /// Verified initial windows staged until the atomic batch is complete.
@@ -687,6 +696,9 @@ final class RemoteTmuxControlConnection {
         windowReorderBatchFailed = false
         windowReorderRecoveryGeneration = nil
         pendingLayouts.removeAll()
+        // Rects fetched on the old stream say nothing about what changed while it was down.
+        verifiedRawLayouts.removeAll()
+        windowsOwingRectsRefetch.removeAll()
         paneTitleMetadataSnapshotRevisions.removeAll()
         initialBatchAwaiting = nil
         initialBatchStaged.removeAll()
@@ -1285,14 +1297,36 @@ final class RemoteTmuxControlConnection {
     /// exercise it.
     func ingest(_ data: Data) {
         lastTransportOutputAt = .now
-        for message in parser.feed(data) {
-            handle(message)
+        // One read can carry hundreds of pane-rects replies, for example the answers to a size
+        // change across every window. Each one publishes a window and asks for a topology
+        // notification, and each notification rebuilds every mirror of this stream, so a run of
+        // consecutive rects replies notifies once. Any other message first delivers the held
+        // notification: command completions (a divider barrier, a new-window callback) and
+        // notifications read state the mirrors derive in their rebuild, so they must still see
+        // it current, exactly as when every reply notified at once.
+        observers.coalescingTopologyNotifications {
+            for message in parser.feed(data) {
+                if !isSuccessfulPaneRectsReply(message) {
+                    observers.flushPendingTopologyNotification()
+                }
+                handle(message)
+            }
         }
         // A prompt has no newline, so no line message ever carries it; check the unterminated
         // tail after every chunk while the transport is still talking.
         if connectionState == .connecting || connectionState == .reconnecting {
             noteCredentialPromptIfSeen()
         }
+    }
+
+    /// Whether `message` is the successful reply to the pane-rects fetch at the head of the
+    /// command queue, the one kind of message whose topology notification may wait for the
+    /// next message.
+    private func isSuccessfulPaneRectsReply(_ message: RemoteTmuxControlMessage) -> Bool {
+        guard case .commandResult(_, _, isError: false) = message,
+              case .paneRects? = pendingCommands.first
+        else { return false }
+        return true
     }
 
     private func handleStreamEnd(processGeneration generation: UInt64) async {
@@ -1665,6 +1699,11 @@ final class RemoteTmuxControlConnection {
             // reconcile.
             record("unlinked-window-renamed @\(id)")
         case let .windowClose(id):
+            // Whether cmux ever held this window: published, awaiting its rects, or staged in the
+            // initial batch. Read before the state below is cleared.
+            let windowWasKnown = windowsByID[id] != nil
+                || pendingLayouts[id] != nil
+                || initialBatchStaged[id] != nil
             let closingPaneIDs = Set(windowsByID[id]?.paneIDsInOrder ?? [])
                 .union(pendingLayouts[id]?.node.paneIDsInOrder ?? [])
             paneIDsRetainedUntilWindowList.formUnion(closingPaneIDs)
@@ -1703,6 +1742,8 @@ final class RemoteTmuxControlConnection {
             #endif
             pendingLayouts[id] = nil
             initialBatchStaged[id] = nil
+            verifiedRawLayouts[id] = nil
+            windowsOwingRectsRefetch.remove(id)
             finishInitialBatchMember(id)
             prunePaneState(keeping: paneIDsForStatePruning())
             record("window-close @\(id)")
@@ -1710,7 +1751,13 @@ final class RemoteTmuxControlConnection {
             // the destination layout. Re-list atomically so observers reconcile
             // against the destination's pending tree instead of pruning the
             // surviving pane during that event gap.
-            requestWindows()
+            //
+            // A window cmux never had has no pane to keep alive and no tab to
+            // reconcile, so its close skips the re-list. On the shared view stream
+            // that is every short-lived window another session opens and closes
+            // before cmux links it, and re-listing for each one cost a full
+            // window list on a host with hundreds of windows.
+            if windowWasKnown { requestWindows() }
             // Remove the closed window's tab immediately. The retained-pane
             // ledger above keeps any moved pane's control identity alive until
             // the authoritative window snapshot publishes its destination.
@@ -1797,6 +1844,9 @@ final class RemoteTmuxControlConnection {
                     #if DEBUG
                     cmuxDebugLog("remote.border.change @\(windowId) \(baseline)->\(status) refetching")
                     #endif
+                    // The layout string does not change with the border status, so mark the
+                    // window or the re-list would find its layout current and skip the fetch.
+                    windowsOwingRectsRefetch.insert(windowId)
                     requestWindows()
                 }
             } else if name == Self.sessionDigestSubscriptionName, isSharedViewStream {

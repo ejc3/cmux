@@ -213,6 +213,8 @@ extension RemoteTmuxControlConnection {
                 windowsByID = windowsByID.filter { liveIDs.contains($0.key) }
                 prunePublishedPaneOwnership(liveWindowIds: liveIDs)
                 pendingLayouts = pendingLayouts.filter { liveIDs.contains($0.key) }
+                verifiedRawLayouts = verifiedRawLayouts.filter { liveIDs.contains($0.key) }
+                windowsOwingRectsRefetch.formIntersection(liveIDs)
                 // A population that starts from an empty table (first attach,
                 // reconnect reseed after every window closed) publishes
                 // atomically: hold each window's verified tree in staging
@@ -230,14 +232,32 @@ extension RemoteTmuxControlConnection {
                     initialBatchAwaiting = awaiting
                     flushInitialBatchIfDrained()
                 }
+                // Only a window whose layout differs from the newest one cmux already verified
+                // or is fetching needs its rects. A list runs for every window added, closed or
+                // reordered, and refetching every window each time costs one `list-panes` per
+                // window, each answered by a rebuild of every mirror.
+                var unchangedWindows = 0
                 for (id, window) in next {
                     applyWindowName(windowId: id, name: window.name)
+                    let raw = RemoteTmuxRawWindowLayout(
+                        node: window.layout, visibleNode: window.visibleLayout, zoomed: window.zoomed
+                    )
+                    if layoutIsAlreadyCurrent(windowId: id, raw: raw) {
+                        ensureBorderStatusSubscription(windowId: id)
+                        unchangedWindows += 1
+                        continue
+                    }
                     stagePendingLayout(
                         windowId: id,
                         node: window.layout, visibleNode: window.visibleLayout,
                         zoomed: window.zoomed, name: window.name
                     )
                 }
+                #if DEBUG
+                if unchangedWindows > 0 {
+                    cmuxDebugLog("remote.rects.skip windows=\(unchangedWindows) layout unchanged")
+                }
+                #endif
                 // This complete snapshot decides only the close gaps already
                 // represented when its request was sent. A later overlapping
                 // close remains retained for its own snapshot.

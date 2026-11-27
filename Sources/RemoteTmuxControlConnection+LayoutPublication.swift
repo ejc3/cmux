@@ -55,12 +55,43 @@ extension RemoteTmuxControlConnection {
             ?? initialBatchStaged[windowId]?.name
             ?? ""
         let visibleNode = visibleLayout.flatMap { RemoteTmuxRawLayoutParser.parse($0) }
+        let raw = RemoteTmuxRawWindowLayout(
+            node: node, visibleNode: visibleNode, zoomed: zoomed && visibleNode != nil
+        )
+        // tmux reports `%layout-change` for every window of the session when one window's size
+        // is set, and most of those layouts did not change. Fetching rects for each of them is
+        // a full round of `list-panes` per tab switch on a host with hundreds of windows.
+        guard !layoutIsAlreadyCurrent(windowId: windowId, raw: raw) else {
+            ensureBorderStatusSubscription(windowId: windowId)
+            #if DEBUG
+            cmuxDebugLog("remote.rects.skip @\(windowId) layout unchanged")
+            #endif
+            return
+        }
         stagePendingLayout(
             windowId: windowId,
             node: node, visibleNode: visibleNode,
-            zoomed: zoomed && visibleNode != nil,
+            zoomed: raw.zoomed,
             name: existingName
         )
+    }
+
+    /// Whether staging `raw` for `windowId` would only repeat a rects fetch whose answer cmux
+    /// already has or is waiting for. That holds when the newest layout cmux knows for the window
+    /// is `raw`: the pending layout while its fetch is in flight, otherwise the layout behind the
+    /// published (or initial-batch) tree. A window owed a refetch never counts as current.
+    ///
+    /// Skipping keeps the quarantine intact: nothing publishes here, and the tree observers see
+    /// is still the one a rects reply verified for this same layout.
+    func layoutIsAlreadyCurrent(windowId: Int, raw: RemoteTmuxRawWindowLayout) -> Bool {
+        guard !windowsOwingRectsRefetch.contains(windowId) else { return false }
+        if let pending = pendingLayouts[windowId] {
+            return pending.inFlight && pending.raw == raw
+        }
+        guard windowsByID[windowId] != nil || initialBatchStaged[windowId] != nil else {
+            return false
+        }
+        return verifiedRawLayouts[windowId] == raw
     }
 
 
@@ -75,14 +106,14 @@ extension RemoteTmuxControlConnection {
         zoomed: Bool,
         name: String
     ) {
-        // Every window that ever has a layout passes through here, so this is the
-        // one place that covers attach, %window-add, and a reconnect's restage:
-        // watch `pane-border-status`, the only layout input tmux changes without
-        // announcing it (see borderStatusSubscriptionPrefix).
-        if !borderStatusSubscribedWindows.contains(windowId) {
-            borderStatusSubscribedWindows.insert(windowId)
-            subscribeWindowBorderStatus(windowId: windowId)
-        }
+        // Every window passes through here at least once per control stream (attach,
+        // %window-add, a reconnect's restage), so this covers watching
+        // `pane-border-status`, the only layout input tmux changes without announcing
+        // it (see borderStatusSubscriptionPrefix). A restage skipped because the layout
+        // is current calls the same helper.
+        ensureBorderStatusSubscription(windowId: windowId)
+        // This fetch is the refetch the window was owed.
+        windowsOwingRectsRefetch.remove(windowId)
         var pending = pendingLayouts[windowId] ?? RemoteTmuxPendingLayout(
             node: node, visibleNode: visibleNode, zoomed: zoomed, name: name, generation: 0
         )
@@ -107,6 +138,14 @@ extension RemoteTmuxControlConnection {
         #if DEBUG
         cmuxDebugLog("remote.rects.stage @\(windowId) gen=\(pending.generation) sent=\(pending.inFlight ? 1 : 0)")
         #endif
+    }
+
+
+    /// Watches `windowId`'s `pane-border-status` once per control stream.
+    func ensureBorderStatusSubscription(windowId: Int) {
+        guard !borderStatusSubscribedWindows.contains(windowId) else { return }
+        borderStatusSubscribedWindows.insert(windowId)
+        subscribeWindowBorderStatus(windowId: windowId)
     }
 
 
@@ -294,6 +333,9 @@ extension RemoteTmuxControlConnection {
             visibleLayout: pending.visibleNode?.patchingLeafRects(rects),
             zoomed: pending.zoomed
         )
+        // `published` is built from the pending tree, so that tree's raw layout is what a later
+        // window list or `%layout-change` compares against.
+        verifiedRawLayouts[windowId] = pending.raw
         if pending.dirty || isStaleReply {
             // A newer layout superseded this one mid-flight: publish this
             // verified state now (it is true as of this reply) and fetch the
